@@ -27,8 +27,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TypeDescriptor;
 import org.apache.beam.sdk.values.WindowingStrategy;
 import org.joda.time.Duration;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * {@code Distinct<T>} takes a {@code PCollection<T>} and returns a {@code PCollection<T>} that has
@@ -58,13 +56,11 @@ import org.slf4j.LoggerFactory;
  * PCollection<String> words = ...;
  * PCollection<String> uniqueWords =
  *     words.apply(Distinct.<String>create());
- * }
- * </pre>
+ * }</pre>
  *
  * @param <T> the type of the elements of the input and output {@code PCollection}s
  */
 public class Distinct<T> extends PTransform<PCollection<T>, PCollection<T>> {
-  private static final Logger LOG = LoggerFactory.getLogger(Distinct.class);
 
   /**
    * Returns a {@code Distinct<T>} {@code PTransform}.
@@ -93,7 +89,7 @@ public class Distinct<T> extends PTransform<PCollection<T>, PCollection<T>> {
             || strategy.getAllowedLateness().isLongerThan(Duration.ZERO))) {
       throw new UnsupportedOperationException(
           String.format(
-              "%s does not support non-merging windowing strategies, except when using the default "
+              "%s does not support merging windowing strategies, except when using the default "
                   + "trigger and zero allowed lateness.",
               Distinct.class.getSimpleName()));
     }

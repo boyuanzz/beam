@@ -18,12 +18,16 @@
 
 package org.apache.beam.runners.core.construction;
 
+import static com.google.common.base.Preconditions.checkState;
+
 import com.google.auto.service.AutoService;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Sets;
 import java.util.Map;
+import java.util.Set;
 import org.apache.beam.sdk.coders.ByteArrayCoder;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.IterableCoder;
@@ -37,26 +41,26 @@ import org.apache.beam.sdk.util.WindowedValue.FullWindowedValueCoder;
 /** The {@link CoderTranslatorRegistrar} for coders which are shared across languages. */
 @AutoService(CoderTranslatorRegistrar.class)
 public class ModelCoderRegistrar implements CoderTranslatorRegistrar {
+
   // The URNs for coders which are shared across languages
   @VisibleForTesting
   static final BiMap<Class<? extends Coder>, String> BEAM_MODEL_CODER_URNS =
       ImmutableBiMap.<Class<? extends Coder>, String>builder()
-          .put(ByteArrayCoder.class, "urn:beam:coders:bytes:0.1")
-          .put(KvCoder.class, "urn:beam:coders:kv:0.1")
-          .put(VarLongCoder.class, "urn:beam:coders:varint:0.1")
-          .put(IntervalWindowCoder.class, "urn:beam:coders:interval_window:0.1")
-          .put(IterableCoder.class, "urn:beam:coders:stream:0.1")
-          .put(LengthPrefixCoder.class, "urn:beam:coders:length_prefix:0.1")
-          .put(GlobalWindow.Coder.class, "urn:beam:coders:global_window:0.1")
-          .put(FullWindowedValueCoder.class, "urn:beam:coders:windowed_value:0.1")
+          .put(ByteArrayCoder.class, ModelCoders.BYTES_CODER_URN)
+          .put(KvCoder.class, ModelCoders.KV_CODER_URN)
+          .put(VarLongCoder.class, ModelCoders.INT64_CODER_URN)
+          .put(IntervalWindowCoder.class, ModelCoders.INTERVAL_WINDOW_CODER_URN)
+          .put(IterableCoder.class, ModelCoders.ITERABLE_CODER_URN)
+          .put(LengthPrefixCoder.class, ModelCoders.LENGTH_PREFIX_CODER_URN)
+          .put(GlobalWindow.Coder.class, ModelCoders.GLOBAL_WINDOW_CODER_URN)
+          .put(FullWindowedValueCoder.class, ModelCoders.WINDOWED_VALUE_CODER_URN)
           .build();
 
+  public static final Set<String> WELL_KNOWN_CODER_URNS = BEAM_MODEL_CODER_URNS.values();
+
   @VisibleForTesting
-  static final Map<Class<? extends Coder>, CoderTranslator<? extends Coder>>
-      BEAM_MODEL_CODERS =
-      ImmutableMap
-          .<Class<? extends Coder>, CoderTranslator<? extends Coder>>
-              builder()
+  static final Map<Class<? extends Coder>, CoderTranslator<? extends Coder>> BEAM_MODEL_CODERS =
+      ImmutableMap.<Class<? extends Coder>, CoderTranslator<? extends Coder>>builder()
           .put(ByteArrayCoder.class, CoderTranslators.atomic(ByteArrayCoder.class))
           .put(VarLongCoder.class, CoderTranslators.atomic(VarLongCoder.class))
           .put(IntervalWindowCoder.class, CoderTranslators.atomic(IntervalWindowCoder.class))
@@ -66,6 +70,20 @@ public class ModelCoderRegistrar implements CoderTranslatorRegistrar {
           .put(LengthPrefixCoder.class, CoderTranslators.lengthPrefix())
           .put(FullWindowedValueCoder.class, CoderTranslators.fullWindowedValue())
           .build();
+
+  static {
+    checkState(
+        BEAM_MODEL_CODERS.keySet().containsAll(BEAM_MODEL_CODER_URNS.keySet()),
+        "Every Model %s must have an associated %s. Missing: %s",
+        Coder.class.getSimpleName(),
+        CoderTranslator.class.getSimpleName(),
+        Sets.difference(BEAM_MODEL_CODER_URNS.keySet(), BEAM_MODEL_CODERS.keySet()));
+    checkState(
+        ModelCoders.urns().equals(BEAM_MODEL_CODER_URNS.values()),
+        "All Model %ss should have an associated java %s",
+        Coder.class.getSimpleName(),
+        Coder.class.getSimpleName());
+  }
 
   @Override
   public Map<Class<? extends Coder>, String> getCoderURNs() {

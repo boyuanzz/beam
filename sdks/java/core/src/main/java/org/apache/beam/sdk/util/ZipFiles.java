@@ -136,12 +136,10 @@ public final class ZipFiles {
           }
         } else {
           File parentFile = targetFile.getParentFile();
-          if (!parentFile.isDirectory()) {
-            if (!parentFile.mkdirs()) {
-              throw new IOException(
-                      "Failed to create directory: "
-                              + parentFile.getAbsolutePath());
-            }
+          if (!parentFile.isDirectory() && !parentFile.mkdirs()) {
+            throw new IOException(
+                    "Failed to create directory: "
+                            + parentFile.getAbsolutePath());
           }
           // Write the file to the destination.
           asByteSource(zipFileObj, entry).copyTo(Files.asByteSink(targetFile));
@@ -167,7 +165,7 @@ public final class ZipFiles {
       // name like "foo..bar" or even "foo..", which should be fine.
       File file = new File(name);
       while (file != null) {
-        if (file.getName().equals("..")) {
+        if ("..".equals(file.getName())) {
           throw new IOException("Cannot unzip file containing an entry with "
               + "\"..\" in the name: " + name);
         }

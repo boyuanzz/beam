@@ -106,7 +106,9 @@ class ShardReadersPool {
     }
   }
 
-  private void startReadingShards(Iterable<ShardRecordsIterator> shardRecordsIterators) {
+  // Note: readLoop() will log any Throwable raised so opt to ignore the future result
+  @SuppressWarnings("FutureReturnValueIgnored")
+  void startReadingShards(Iterable<ShardRecordsIterator> shardRecordsIterators) {
     for (final ShardRecordsIterator recordsIterator : shardRecordsIterators) {
       numberOfRecordsInAQueueByShard.put(recordsIterator.getShardId(), new AtomicInteger());
       executorService.submit(() -> readLoop(recordsIterator));

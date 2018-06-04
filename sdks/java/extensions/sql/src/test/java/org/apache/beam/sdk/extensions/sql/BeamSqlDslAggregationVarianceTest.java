@@ -17,63 +17,53 @@
  */
 package org.apache.beam.sdk.extensions.sql;
 
-import static org.apache.beam.sdk.extensions.sql.utils.BeamRecordAsserts.matchesScalar;
+import static org.apache.beam.sdk.extensions.sql.utils.RowAsserts.matchesScalar;
 
 import java.util.List;
+import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
-import org.apache.beam.sdk.values.BeamRecord;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.Row;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
-/**
- * Integration tests for {@code VAR_POP} and {@code VAR_SAMP}.
- */
+/** Integration tests for {@code VAR_POP} and {@code VAR_SAMP}. */
 public class BeamSqlDslAggregationVarianceTest {
 
   private static final double PRECISION = 1e-7;
 
-  @Rule
-  public TestPipeline pipeline = TestPipeline.create();
+  @Rule public TestPipeline pipeline = TestPipeline.create();
 
-  private PCollection<BeamRecord> boundedInput;
+  private PCollection<Row> boundedInput;
 
   @Before
   public void setUp() {
-    BeamRecordSqlType rowType = BeamRecordSqlType.builder()
-        .withIntegerField("f_int")
-        .withDoubleField("f_double")
-        .withIntegerField("f_int2")
-        .build();
+    Schema schema =
+        RowSqlTypes.builder()
+            .withIntegerField("f_int")
+            .withDoubleField("f_double")
+            .withIntegerField("f_int2")
+            .build();
 
-    List<BeamRecord> recordsInTableB =
-        TestUtils.RowsBuilder
-            .of(rowType)
+    List<Row> rowsInTableB =
+        TestUtils.RowsBuilder.of(schema)
             .addRows(
-                1,  1.0,  0,
-                4,  4.0,  0,
-                7,  7.0,  0,
-                13, 13.0, 0,
-                5,  5.0,  0,
-                10, 10.0, 0,
-                17, 17.0, 0)
+                1, 1.0, 0, 4, 4.0, 0, 7, 7.0, 0, 13, 13.0, 0, 5, 5.0, 0, 10, 10.0, 0, 17, 17.0, 0)
             .getRows();
 
-    boundedInput = PBegin
-        .in(pipeline)
-        .apply(Create.of(recordsInTableB).withCoder(rowType.getRecordCoder()));
+    boundedInput =
+        PBegin.in(pipeline).apply(Create.of(rowsInTableB).withCoder(schema.getRowCoder()));
   }
 
   @Test
   public void testPopulationVarianceDouble() {
     String sql = "SELECT VAR_POP(f_double) FROM PCOLLECTION GROUP BY f_int2";
 
-    PAssert
-        .that(boundedInput.apply(BeamSql.query(sql)))
+    PAssert.that(boundedInput.apply(BeamSql.query(sql)))
         .satisfies(matchesScalar(26.40816326, PRECISION));
 
     pipeline.run().waitUntilFinish();
@@ -83,9 +73,7 @@ public class BeamSqlDslAggregationVarianceTest {
   public void testPopulationVarianceInt() {
     String sql = "SELECT VAR_POP(f_int) FROM PCOLLECTION GROUP BY f_int2";
 
-    PAssert
-        .that(boundedInput.apply(BeamSql.query(sql)))
-        .satisfies(matchesScalar(26));
+    PAssert.that(boundedInput.apply(BeamSql.query(sql))).satisfies(matchesScalar(26));
 
     pipeline.run().waitUntilFinish();
   }
@@ -94,8 +82,7 @@ public class BeamSqlDslAggregationVarianceTest {
   public void testSampleVarianceDouble() {
     String sql = "SELECT VAR_SAMP(f_double) FROM PCOLLECTION GROUP BY f_int2";
 
-    PAssert
-        .that(boundedInput.apply(BeamSql.query(sql)))
+    PAssert.that(boundedInput.apply(BeamSql.query(sql)))
         .satisfies(matchesScalar(30.80952381, PRECISION));
 
     pipeline.run().waitUntilFinish();
@@ -105,9 +92,7 @@ public class BeamSqlDslAggregationVarianceTest {
   public void testSampleVarianceInt() {
     String sql = "SELECT VAR_SAMP(f_int) FROM PCOLLECTION GROUP BY f_int2";
 
-    PAssert
-        .that(boundedInput.apply(BeamSql.query(sql)))
-        .satisfies(matchesScalar(30));
+    PAssert.that(boundedInput.apply(BeamSql.query(sql))).satisfies(matchesScalar(30));
 
     pipeline.run().waitUntilFinish();
   }

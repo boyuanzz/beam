@@ -32,6 +32,7 @@ import org.apache.beam.model.pipeline.v1.RunnerApi.PTransform;
 import org.apache.beam.model.pipeline.v1.RunnerApi.ParDoPayload;
 import org.apache.beam.model.pipeline.v1.RunnerApi.ReadPayload;
 import org.apache.beam.model.pipeline.v1.RunnerApi.WindowIntoPayload;
+import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.io.CountingSource;
 import org.apache.beam.sdk.io.Read;
@@ -80,6 +81,7 @@ public class EnvironmentsTest implements Serializable {
                       public void process(ProcessContext ctxt) {}
                     })
                 .withOutputTags(new TupleTag<>(), TupleTagList.empty()),
+            Pipeline.create(),
             components);
     RehydratedComponents rehydratedComponents =
         RehydratedComponents.forComponents(components.toComponents());
@@ -115,7 +117,7 @@ public class EnvironmentsTest implements Serializable {
         PTransform.newBuilder()
             .setSpec(
                 FunctionSpec.newBuilder()
-                    .setUrn(PTransformTranslation.WINDOW_TRANSFORM_URN)
+                    .setUrn(PTransformTranslation.ASSIGN_WINDOWS_TRANSFORM_URN)
                     .setPayload(payload.toByteString())
                     .build())
             .build();
@@ -159,7 +161,7 @@ public class EnvironmentsTest implements Serializable {
         PTransform.newBuilder()
             .setSpec(
                 FunctionSpec.newBuilder()
-                    .setUrn(PTransformTranslation.WINDOW_TRANSFORM_URN)
+                    .setUrn(PTransformTranslation.ASSIGN_WINDOWS_TRANSFORM_URN)
                     .setPayload(payload.toByteString())
                     .build())
             .build();

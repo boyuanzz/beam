@@ -56,8 +56,6 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PDone;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 
 /**
@@ -120,8 +118,6 @@ import org.slf4j.LoggerFactory;
  */
 @Experimental(Experimental.Kind.SOURCE_SINK)
 public class JmsIO {
-
-  private static final Logger LOG = LoggerFactory.getLogger(JmsIO.class);
 
   public static Read<JmsRecord> read() {
     return new AutoValue_JmsIO_Read.Builder<JmsRecord>()
@@ -301,7 +297,7 @@ public class JmsIO {
      * @return The corresponding {@link JmsIO.Read}.
      */
     public Read<T> withMaxNumRecords(long maxNumRecords) {
-      checkArgument(maxNumRecords >= 0, "maxNumRecords must be > 0, but was: %d", maxNumRecords);
+      checkArgument(maxNumRecords >= 0, "maxNumRecords must be > 0, but was: %s", maxNumRecords);
       return builder().setMaxNumRecords(maxNumRecords).build();
     }
 

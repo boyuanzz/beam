@@ -98,6 +98,9 @@ class CounterName(_CounterName):
   def __repr__(self):
     return '<CounterName<%s> at %s>' % (self._str_internal(), hex(id(self)))
 
+  def __str__(self):
+    return self._str_internal()
+
   def _str_internal(self):
     if self.origin == CounterName.USER:
       return 'user-%s-%s' % (self.step_name, self.name)
@@ -127,6 +130,10 @@ class Counter(object):
   # Handy references to common counters.
   SUM = cy_combiners.SumInt64Fn()
   MEAN = cy_combiners.MeanInt64Fn()
+
+  # Dataflow Distribution Accumulator Fn.
+  # TODO(BEAM-4045): Generalize distribution counter if necessary.
+  DATAFLOW_DISTRIBUTION = cy_combiners.DataflowDistributionCounterFn()
 
   def __init__(self, name, combine_fn):
     """Creates a Counter object.
