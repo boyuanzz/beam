@@ -329,10 +329,13 @@ public class BatchDataflowWorker implements Closeable {
               String.valueOf(workItem.getId()));
 
       if (workItem.getMapTask() != null) {
+        LOG.info("[BOYUANZ LOG]: getMapTask {}", workItem.getMapTask());
         MutableNetwork<Node, Edge> network = mapTaskToNetwork.apply(workItem.getMapTask());
         if (LOG.isDebugEnabled()) {
           LOG.debug("Network as Graphviz .dot: {}", Networks.toDot(network));
         }
+        LOG.info("[BOYUANZ LOG]: output converted network from mapTask");
+        LOG.info("Network as Graphviz .dot: {}", Networks.toDot(network));
         worker =
             mapTaskExecutorFactory.create(
                 sdkWorkerHarness.getControlClientHandler(),

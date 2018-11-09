@@ -39,6 +39,8 @@ import org.apache.beam.runners.dataflow.worker.graph.Edges.MultiOutputInfoEdge;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.InstructionOutputNode;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.Node;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.ParallelInstructionNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Splits the instruction graph into SDK and runner harness portions replacing the SDK sub-graphs
@@ -73,7 +75,7 @@ import org.apache.beam.runners.dataflow.worker.graph.Nodes.ParallelInstructionNo
  */
 public class CreateRegisterFnOperationFunction
     implements Function<MutableNetwork<Node, Edge>, MutableNetwork<Node, Edge>> {
-
+  private static final Logger LOG = LoggerFactory.getLogger(CreateRegisterFnOperationFunction.class);
   private final Supplier<String> idGenerator;
   private final BiFunction<String, String, Node> portSupplier;
   private final Function<MutableNetwork<Node, Edge>, Node> registerFnOperationFunction;
@@ -179,6 +181,9 @@ public class CreateRegisterFnOperationFunction
         network.removeNode(outputNode);
       }
     }
+
+    LOG.info("[BOYUANZ LOG]: get runnerToSdkBoundaries {}", runnerToSdkBoundaries);
+    LOG.info("[BOYUANZ LOG]: get sdkToRunnerBoundaries {}", sdkToRunnerBoundaries);
 
     // Create the subnetworks that represent potentially multiple fused SDK portions and a single
     // fused Runner portion replacing the SDK portion that is embedded within the Runner portion
