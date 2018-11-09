@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -48,6 +49,7 @@ import org.apache.beam.model.fnexecution.v1.BeamFnApi.ProcessBundleDescriptor;
 import org.apache.beam.model.fnexecution.v1.BeamFnApi.RegisterRequest;
 import org.apache.beam.model.pipeline.v1.Endpoints;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
+import org.apache.beam.model.pipeline.v1.RunnerApi.Environment;
 import org.apache.beam.model.pipeline.v1.RunnerApi.SideInput;
 import org.apache.beam.model.pipeline.v1.RunnerApi.StandardPTransforms;
 import org.apache.beam.runners.core.SideInputReader;
@@ -59,7 +61,11 @@ import org.apache.beam.runners.core.construction.ParDoTranslation;
 import org.apache.beam.runners.core.construction.SdkComponents;
 import org.apache.beam.runners.core.construction.SyntheticComponents;
 import org.apache.beam.runners.core.construction.WindowingStrategyTranslation;
+import org.apache.beam.runners.core.construction.graph.ExecutableStage;
+import org.apache.beam.runners.core.construction.graph.ImmutableExecutableStage;
 import org.apache.beam.runners.core.construction.graph.PipelineNode;
+import org.apache.beam.runners.core.construction.graph.PipelineNode.PCollectionNode;
+import org.apache.beam.runners.core.construction.graph.PipelineNode.PTransformNode;
 import org.apache.beam.runners.dataflow.util.CloudObject;
 import org.apache.beam.runners.dataflow.util.CloudObjects;
 import org.apache.beam.runners.dataflow.util.PropertyNames;
@@ -69,6 +75,7 @@ import org.apache.beam.runners.dataflow.worker.counters.NameContext;
 import org.apache.beam.runners.dataflow.worker.graph.Edges.DefaultEdge;
 import org.apache.beam.runners.dataflow.worker.graph.Edges.Edge;
 import org.apache.beam.runners.dataflow.worker.graph.Edges.MultiOutputInfoEdge;
+import org.apache.beam.runners.dataflow.worker.graph.Nodes.ExecutableStageNode;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.InstructionOutputNode;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.Node;
 import org.apache.beam.runners.dataflow.worker.graph.Nodes.ParallelInstructionNode;
@@ -118,6 +125,9 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
   private final Supplier<String> idGenerator;
   private final Endpoints.ApiServiceDescriptor stateApiServiceDescriptor;
   private final @Nullable RunnerApi.Pipeline pipeline;
+  private final Boolean useSharedLibrary;
+  private Set<Node> sdkToRunnerBoundaries;
+  private Set<Node> runnerToSdkBoundaries;
 
   /**
    * Returns a {@link RegisterNodeFunction} for a portable Pipeline. UDF-bearing transform payloads
@@ -126,8 +136,10 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
   public static RegisterNodeFunction forPipeline(
       RunnerApi.Pipeline pipeline,
       Supplier<String> idGenerator,
-      Endpoints.ApiServiceDescriptor stateApiServiceDescriptor) {
-    return new RegisterNodeFunction(pipeline, idGenerator, stateApiServiceDescriptor);
+      Endpoints.ApiServiceDescriptor stateApiServiceDescriptor,
+      Boolean useSharedLibrary) {
+    return new RegisterNodeFunction(
+        pipeline, idGenerator, stateApiServiceDescriptor, useSharedLibrary);
   }
 
   /**
@@ -137,16 +149,26 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
    */
   public static RegisterNodeFunction withoutPipeline(
       Supplier<String> idGenerator, Endpoints.ApiServiceDescriptor stateApiServiceDescriptor) {
-    return new RegisterNodeFunction(null, idGenerator, stateApiServiceDescriptor);
+    return new RegisterNodeFunction(null, idGenerator, stateApiServiceDescriptor, false);
   }
 
   private RegisterNodeFunction(
       @Nullable RunnerApi.Pipeline pipeline,
       Supplier<String> idGenerator,
-      Endpoints.ApiServiceDescriptor stateApiServiceDescriptor) {
+      Endpoints.ApiServiceDescriptor stateApiServiceDescriptor,
+      Boolean useSharedLibrary) {
     this.pipeline = pipeline;
     this.idGenerator = idGenerator;
     this.stateApiServiceDescriptor = stateApiServiceDescriptor;
+    this.useSharedLibrary = useSharedLibrary;
+  }
+
+  public void setSdkToRunnerBoundaries(Set<Node> sdkToRunnerBoundaries) {
+    this.sdkToRunnerBoundaries = sdkToRunnerBoundaries;
+  }
+
+  public void setRunnerToSdkBoundaries(Set<Node> runnerToSdkBoundaries) {
+    this.runnerToSdkBoundaries = runnerToSdkBoundaries;
   }
 
   @Override
@@ -219,6 +241,10 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
         ImmutableMap.builder();
     ImmutableMap.Builder<String, Iterable<PCollectionView<?>>> ptransformIdToPCollectionViews =
         ImmutableMap.builder();
+    // A filed of ExecutableStage which includes the PCollection goes to worker side.
+    Set<PCollectionNode> exexutableStageOutputs = new HashSet<>();
+    // A filed of ExecutableStage which includes the PCollection goes to runner side.
+    Set<PCollectionNode> executableStageInputs = new HashSet<>();
 
     for (InstructionOutputNode node :
         Iterables.filter(input.nodes(), InstructionOutputNode.class)) {
@@ -260,15 +286,27 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
       }
 
       String pcollectionId = "generatedPcollection" + idGenerator.get();
-      processBundleDescriptor.putPcollections(
-          pcollectionId,
+      RunnerApi.PCollection pCollection =
           RunnerApi.PCollection.newBuilder()
               .setCoderId(coderId)
               .setWindowingStrategyId(fakeWindowingStrategyId)
-              .build());
+              .build();
+      processBundleDescriptor.putPcollections(pcollectionId, pCollection);
       nodesToPCollections.put(node, pcollectionId);
+
+      // Check whether this output collection has consumers from worker side when "use_shared_lib"
+      // is set
+      if (this.useSharedLibrary) {
+        if (this.sdkToRunnerBoundaries.contains(node)) {
+          exexutableStageOutputs.add(PipelineNode.pCollection(pcollectionId, pCollection));
+        }
+        if (this.runnerToSdkBoundaries.contains(node)) {
+          executableStageInputs.add(PipelineNode.pCollection(pcollectionId, pCollection));
+        }
+      }
     }
     processBundleDescriptor.putAllCoders(sdkComponents.toComponents().getCodersMap());
+    Set<PTransformNode> exetuableStageTransforms = new HashSet<>();
 
     for (ParallelInstructionNode node :
         Iterables.filter(input.nodes(), ParallelInstructionNode.class)) {
@@ -395,6 +433,7 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
 
       pTransform.setSpec(transformSpec);
       processBundleDescriptor.putTransforms(ptransformId, pTransform.build());
+      exetuableStageTransforms.add(PipelineNode.pTransform(ptransformId, pTransform.build()));
     }
 
     // Add the PTransforms representing the remote gRPC nodes
@@ -428,6 +467,25 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
       processBundleDescriptor.putTransforms(node.getPrimitiveTransformId(), pTransform.build());
     }
 
+    if (this.useSharedLibrary) {
+      PCollectionNode executableInput = executableStageInputs.iterator().next();
+      RunnerApi.Components exetuableStageComponents = sdkComponents.toComponents();
+      Environment executableStageEnv =
+          Environments.getEnvironment(
+                  exetuableStageTransforms.iterator().next().getId(), exetuableStageComponents)
+              .get();
+      ExecutableStage exetutableStage =
+          ImmutableExecutableStage.ofFullComponents(
+              exetuableStageComponents,
+              executableStageEnv,
+              executableInput,
+              null,
+              null,
+              null,
+              exetuableStageTransforms,
+              exexutableStageOutputs);
+      return ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
+    }
     return RegisterRequestNode.create(
         RegisterRequest.newBuilder().addProcessBundleDescriptor(processBundleDescriptor).build(),
         ptransformIdToNameContexts.build(),
