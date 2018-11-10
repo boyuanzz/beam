@@ -94,6 +94,8 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
 import org.apache.beam.vendor.protobuf.v3.com.google.protobuf.ByteString;
 import org.apache.beam.vendor.protobuf.v3.com.google.protobuf.InvalidProtocolBufferException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Converts a {@link Network} representation of {@link MapTask} destined for the SDK harness into an
@@ -103,6 +105,7 @@ import org.apache.beam.vendor.protobuf.v3.com.google.protobuf.InvalidProtocolBuf
  */
 public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>, Node> {
   /** Must match declared fields within {@code ProcessBundleHandler}. */
+  private static final Logger LOG = LoggerFactory.getLogger(RegisterNodeFunction.class);
   private static final String DATA_INPUT_URN = "urn:org.apache.beam:source:runner:0.1";
 
   private static final String DATA_OUTPUT_URN = "urn:org.apache.beam:sink:runner:0.1";
@@ -246,8 +249,18 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
     // A filed of ExecutableStage which includes the PCollection goes to runner side.
     Set<PCollectionNode> executableStageInputs = new HashSet<>();
 
+    LOG.info("[BOYUANZ LOG]: sdkToRunnerBoundaries {}", this.sdkToRunnerBoundaries);
+    this.sdkToRunnerBoundaries.forEach(node -> {
+      LOG.info("[BOYUANZ LOG] sdkToRunnerBoundaries node {} hashcode {}", node, node.hashCode());
+    });
+    LOG.info("[BOYUANZ LOG]: runnerToSdkBoundaries {}", this.runnerToSdkBoundaries);
+    this.runnerToSdkBoundaries.forEach(node -> {
+      LOG.info("[BOYUANZ LOG] runnerToSdkBoundaries node {} hashcode {}", node, node.hashCode());
+    });
+
     for (InstructionOutputNode node :
         Iterables.filter(input.nodes(), InstructionOutputNode.class)) {
+      LOG.info("[BOYUANZ LOG]: InstructionOutputNode {} hashcode {}", node, node.hashCode());
       InstructionOutput instructionOutput = node.getInstructionOutput();
 
       String coderId = "generatedCoder" + idGenerator.get();
@@ -296,7 +309,7 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
 
       // Check whether this output collection has consumers from worker side when "use_shared_lib"
       // is set
-      if (this.useSharedLibrary) {
+      if (true) {
         if (this.sdkToRunnerBoundaries.contains(node)) {
           exexutableStageOutputs.add(PipelineNode.pCollection(pcollectionId, pCollection));
         }
@@ -467,24 +480,29 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
       processBundleDescriptor.putTransforms(node.getPrimitiveTransformId(), pTransform.build());
     }
 
-    if (this.useSharedLibrary) {
-      PCollectionNode executableInput = executableStageInputs.iterator().next();
+    if (true) {
+      LOG.info("[BOYUANZ LOG]: executableStageInputs {}", executableStageInputs);
+      PCollectionNode executableInput = executableStageInputs.isEmpty()? null : executableStageInputs.iterator().next();
       RunnerApi.Components exetuableStageComponents = sdkComponents.toComponents();
-      Environment executableStageEnv =
-          Environments.getEnvironment(
-                  exetuableStageTransforms.iterator().next().getId(), exetuableStageComponents)
-              .get();
-      ExecutableStage exetutableStage =
-          ImmutableExecutableStage.ofFullComponents(
-              exetuableStageComponents,
-              executableStageEnv,
-              executableInput,
-              null,
-              null,
-              null,
-              exetuableStageTransforms,
-              exexutableStageOutputs);
-      return ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
+      // Environment executableStageEnv =
+      //     Environments.getEnvironment(
+      //             exetuableStageTransforms.iterator().next().getId(), exetuableStageComponents)
+      //         .get();
+      // LOG.info("[BOYUANZ LOG]: executableStageEnv {}", executableStageEnv);
+      LOG.info("[BOYUANZ LOG]: exetuableStageComponents {}", exetuableStageComponents);
+      LOG.info("[BOYUANZ LOG]: exetuableStageTransforms {}", exetuableStageTransforms);
+      LOG.info("[BOYUANZ LOG]: exexutableStageOutputs {}", exexutableStageOutputs);
+      // ExecutableStage exetutableStage =
+      //     ImmutableExecutableStage.ofFullComponents(
+      //         exetuableStageComponents,
+      //         executableStageEnv,
+      //         executableInput,
+      //         null,
+      //         null,
+      //         null,
+      //         exetuableStageTransforms,
+      //         exexutableStageOutputs);
+      // ExecutableStageNode executableStageNode = ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
     }
     return RegisterRequestNode.create(
         RegisterRequest.newBuilder().addProcessBundleDescriptor(processBundleDescriptor).build(),
