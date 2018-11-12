@@ -132,8 +132,6 @@ public class CreateRegisterFnOperationFunction
     // Represents the set of nodes which represent gRPC boundaries from the SDK to the Runner.
     Set<Node> sdkToRunnerBoundaries = new HashSet<>();
 
-    Set<Node> sdkToRunnerOutputInstructions = new HashSet<>();
-    Set<Node> runnerToSdkOutputInstrunctoins = new HashSet<>();
 
     ImmutableNetwork<Node, Edge> originalNetwork = ImmutableNetwork.copyOf(network);
 
@@ -173,8 +171,7 @@ public class CreateRegisterFnOperationFunction
                 network,
                 outputNode,
                 predecessorRunnerInstructions,
-                successorSdkInstructions,
-                runnerToSdkOutputInstrunctoins));
+                successorSdkInstructions));
       }
 
       // If there is data that will be flowing from the SDK to the Runner, rewire network to have
@@ -185,8 +182,7 @@ public class CreateRegisterFnOperationFunction
                 network,
                 outputNode,
                 predecessorSdkInstructions,
-                successorRunnerInstructions,
-                sdkToRunnerOutputInstructions));
+                successorRunnerInstructions));
       }
 
       // Remove original output node if it was rewired because it will have become disconnected
@@ -195,9 +191,6 @@ public class CreateRegisterFnOperationFunction
         network.removeNode(outputNode);
       }
     }
-
-    LOG.info("[BOYUANZ LOG]: get runnerToSdkBoundaries {}", runnerToSdkOutputInstrunctoins);
-    LOG.info("[BOYUANZ LOG]: get sdkToRunnerBoundaries {}", sdkToRunnerOutputInstructions);
 
     // Create the subnetworks that represent potentially multiple fused SDK portions and a single
     // fused Runner portion replacing the SDK portion that is embedded within the Runner portion
@@ -216,12 +209,8 @@ public class CreateRegisterFnOperationFunction
       Set<Node> sdkSubnetworkNodes =
           Networks.reachableNodes(network, ImmutableSet.of(sdkRoot), sdkToRunnerBoundaries);
       MutableNetwork<Node, Edge> sdkNetwork = Graphs.inducedSubgraph(network, sdkSubnetworkNodes);
-      sdkFusedStage.setSdkToRunnerBoundaries(sdkToRunnerOutputInstructions);
-      sdkFusedStage.setRunnerToSdkBoundaries(runnerToSdkOutputInstrunctoins);
-      Set<Node> outputNodes = Sets.intersection(sdkNetwork.nodes(), sdkToRunnerOutputInstructions);
-      Set<Node> inputNodes = Sets.intersection(sdkNetwork.nodes(), runnerToSdkOutputInstrunctoins);
-      LOG.info("[BOYUANZ LOG]: outputNodes {}", outputNodes);
-      LOG.info("[BOYUANZ LOG]: inputNodes {}", inputNodes);
+      sdkFusedStage.setSdkToRunnerBoundaries(LengthPrefixUnknownCoders.getSdkToRunnerBoundaries());
+      sdkFusedStage.setRunnerToSdkBoundaries(LengthPrefixUnknownCoders.getRunnerToSdkBoundaries());
       Node registerFnNode = registerFnOperationFunction.apply(sdkNetwork);
 
       runnerNetwork.addNode(registerFnNode);
@@ -262,8 +251,7 @@ public class CreateRegisterFnOperationFunction
       MutableNetwork<Node, Edge> network,
       InstructionOutputNode outputNode,
       Set<Node> predecessors,
-      Set<Node> successors,
-      Set<Node> acrossBoundaryOutputs) {
+      Set<Node> successors) {
 
     InstructionOutputNode newPredecessorOutputNode =
         InstructionOutputNode.create(outputNode.getInstructionOutput());
@@ -305,9 +293,6 @@ public class CreateRegisterFnOperationFunction
         network.addEdge(portOutputNode, successor, edge.clone());
       }
     }
-    acrossBoundaryOutputs.add(newPredecessorOutputNode);
-    LOG.info("[BOYUANZ LOG] newPredecessorOutputNode {} hashcode {}", newPredecessorOutputNode, newPredecessorOutputNode.hashCode());
-    LOG.info("[BOYUANZ LOG] portOutputNode {} hashcode {}", portOutputNode, portOutputNode.hashCode());
     return portNode;
   }
 
