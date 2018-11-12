@@ -67,6 +67,9 @@ import org.apache.beam.runners.core.construction.graph.ImmutableExecutableStage;
 import org.apache.beam.runners.core.construction.graph.PipelineNode;
 import org.apache.beam.runners.core.construction.graph.PipelineNode.PCollectionNode;
 import org.apache.beam.runners.core.construction.graph.PipelineNode.PTransformNode;
+import org.apache.beam.runners.core.construction.graph.SideInputReference;
+import org.apache.beam.runners.core.construction.graph.TimerReference;
+import org.apache.beam.runners.core.construction.graph.UserStateReference;
 import org.apache.beam.runners.dataflow.util.CloudObject;
 import org.apache.beam.runners.dataflow.util.CloudObjects;
 import org.apache.beam.runners.dataflow.util.PropertyNames;
@@ -479,14 +482,17 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
       PCollectionNode executableInput = executableStageInputs.iterator().next();
       RunnerApi.Components exetuableStageComponents = sdkComponents.toComponents();
       Environment executableStageEnv = getEnvironmentFromPTransform(exetuableStageComponents, exetuableStageTransforms);
+      Set<SideInputReference> executableStageSideInputs = new HashSet<>();
+      Set<TimerReference> executableStageTimers = new HashSet<>();
+      Set<UserStateReference> executableStageUserStateReference = new HashSet<>();
       ExecutableStage exetutableStage =
           ImmutableExecutableStage.ofFullComponents(
               exetuableStageComponents,
               executableStageEnv,
               executableInput,
-              null,
-              null,
-              null,
+							executableStageSideInputs,
+							executableStageUserStateReference,
+							executableStageTimers,
               exetuableStageTransforms,
               exexutableStageOutputs);
       ExecutableStageNode executableStageNode = ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
@@ -501,13 +507,11 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
   private Environment getEnvironmentFromPTransform(RunnerApi.Components components, Set<PTransformNode> sdkTransforms) {
     RehydratedComponents sdkComponents = RehydratedComponents.forComponents(components);
     Environment env = null;
-    LOG.info("[BOYUANZ LOG] the count of ptransforms {}", sdkTransforms.size());
     for(PTransformNode pTransformNode : sdkTransforms) {
       env = Environments.getEnvironment(
           pTransformNode.getTransform(), sdkComponents
           )
           .orElse(null);
-      LOG.info("[BOYUANZ LOG] env from ptransform loop {}", env);
       if(env != null) {
         break;
       }
