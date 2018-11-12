@@ -58,6 +58,7 @@ import org.apache.beam.runners.core.construction.CoderTranslation;
 import org.apache.beam.runners.core.construction.Environments;
 import org.apache.beam.runners.core.construction.PTransformTranslation;
 import org.apache.beam.runners.core.construction.ParDoTranslation;
+import org.apache.beam.runners.core.construction.RehydratedComponents;
 import org.apache.beam.runners.core.construction.SdkComponents;
 import org.apache.beam.runners.core.construction.SyntheticComponents;
 import org.apache.beam.runners.core.construction.WindowingStrategyTranslation;
@@ -250,17 +251,10 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
     Set<PCollectionNode> executableStageInputs = new HashSet<>();
 
     LOG.info("[BOYUANZ LOG]: sdkToRunnerBoundaries {}", this.sdkToRunnerBoundaries);
-    this.sdkToRunnerBoundaries.forEach(node -> {
-      LOG.info("[BOYUANZ LOG] sdkToRunnerBoundaries node {} hashcode {}", node, node.hashCode());
-    });
     LOG.info("[BOYUANZ LOG]: runnerToSdkBoundaries {}", this.runnerToSdkBoundaries);
-    this.runnerToSdkBoundaries.forEach(node -> {
-      LOG.info("[BOYUANZ LOG] runnerToSdkBoundaries node {} hashcode {}", node, node.hashCode());
-    });
 
     for (InstructionOutputNode node :
         Iterables.filter(input.nodes(), InstructionOutputNode.class)) {
-      LOG.info("[BOYUANZ LOG]: InstructionOutputNode {} hashcode {}", node, node.hashCode());
       InstructionOutput instructionOutput = node.getInstructionOutput();
 
       String coderId = "generatedCoder" + idGenerator.get();
@@ -354,6 +348,7 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
 
           // TODO: only the non-null branch should exist; for migration ease only
           if (parDoPTransform != null) {
+            LOG.info("[BOYUANZ LOG]: pardoTransform {}", parDoPTransform);
             checkArgument(
                 parDoPTransform
                     .getSpec()
@@ -481,34 +476,43 @@ public class RegisterNodeFunction implements Function<MutableNetwork<Node, Edge>
     }
 
     if (true) {
-      LOG.info("[BOYUANZ LOG]: executableStageInputs {}", executableStageInputs);
-      PCollectionNode executableInput = executableStageInputs.isEmpty()? null : executableStageInputs.iterator().next();
+      PCollectionNode executableInput = executableStageInputs.iterator().next();
       RunnerApi.Components exetuableStageComponents = sdkComponents.toComponents();
-      // Environment executableStageEnv =
-      //     Environments.getEnvironment(
-      //             exetuableStageTransforms.iterator().next().getId(), exetuableStageComponents)
-      //         .get();
-      // LOG.info("[BOYUANZ LOG]: executableStageEnv {}", executableStageEnv);
-      LOG.info("[BOYUANZ LOG]: exetuableStageComponents {}", exetuableStageComponents);
-      LOG.info("[BOYUANZ LOG]: exetuableStageTransforms {}", exetuableStageTransforms);
-      LOG.info("[BOYUANZ LOG]: exexutableStageOutputs {}", exexutableStageOutputs);
-      // ExecutableStage exetutableStage =
-      //     ImmutableExecutableStage.ofFullComponents(
-      //         exetuableStageComponents,
-      //         executableStageEnv,
-      //         executableInput,
-      //         null,
-      //         null,
-      //         null,
-      //         exetuableStageTransforms,
-      //         exexutableStageOutputs);
-      // ExecutableStageNode executableStageNode = ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
+      Environment executableStageEnv = getEnvironmentFromPTransform(exetuableStageComponents, exetuableStageTransforms);
+      ExecutableStage exetutableStage =
+          ImmutableExecutableStage.ofFullComponents(
+              exetuableStageComponents,
+              executableStageEnv,
+              executableInput,
+              null,
+              null,
+              null,
+              exetuableStageTransforms,
+              exexutableStageOutputs);
+      ExecutableStageNode executableStageNode = ExecutableStageNode.create(exetutableStage, ptransformIdToNameContexts.build());
     }
     return RegisterRequestNode.create(
         RegisterRequest.newBuilder().addProcessBundleDescriptor(processBundleDescriptor).build(),
         ptransformIdToNameContexts.build(),
         ptransformIdToSideInputInfos.build(),
         ptransformIdToPCollectionViews.build());
+  }
+
+  private Environment getEnvironmentFromPTransform(RunnerApi.Components components, Set<PTransformNode> sdkTransforms) {
+    RehydratedComponents sdkComponents = RehydratedComponents.forComponents(components);
+    Environment env = null;
+    LOG.info("[BOYUANZ LOG] the count of ptransforms {}", sdkTransforms.size());
+    for(PTransformNode pTransformNode : sdkTransforms) {
+      env = Environments.getEnvironment(
+          pTransformNode.getTransform(), sdkComponents
+          )
+          .orElse(null);
+      LOG.info("[BOYUANZ LOG] env from ptransform loop {}", env);
+      if(env != null) {
+        break;
+      }
+    }
+    return env;
   }
 
   /**
