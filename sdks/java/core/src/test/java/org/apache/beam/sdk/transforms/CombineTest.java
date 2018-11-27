@@ -60,6 +60,7 @@ import org.apache.beam.sdk.coders.VoidCoder;
 import org.apache.beam.sdk.testing.DataflowPortabilityApiUnsupported;
 import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
+import org.apache.beam.sdk.testing.TestNewBundle;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.testing.ValidatesRunner;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
@@ -900,7 +901,7 @@ public class CombineTest implements Serializable {
 
     /** Tests creation of a per-key {@link Combine} via a Java 8 method reference. */
     @Test
-    @Category(ValidatesRunner.class)
+    @Category({ValidatesRunner.class, TestNewBundle.class})
     public void testCombinePerKeyInstanceMethodReference() {
 
       PCollection<KV<String, Integer>> output =
