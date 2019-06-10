@@ -29,6 +29,7 @@ import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
+import org.apache.beam.sdk.testing.ValidatesRunner;
 import org.apache.beam.sdk.transforms.Partition.PartitionFn;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.PCollection;
@@ -172,4 +173,27 @@ public class PartitionTest implements Serializable {
     thrown.expect(CannotProvideCoderException.class);
     pipeline.getCoderRegistry().getCoder(output.get(0).getTypeDescriptor());
   }
+
+  @Test
+  @Category(ValidatesRunner.class)
+  public void testBatchPartitionMoreThan9() throws Exception {
+    Integer partitionNum = 10;
+    PCollectionList<Integer> outputs =
+        pipeline
+            .apply(Create.of(0,1,2,3,4,5,6,7,8,9))
+            .apply(Partition.of(partitionNum, (element, numPartitions) -> element % numPartitions));
+    DoFn<Integer, String> fn = new DoFn<Integer, String>() {
+      @ProcessElement
+      public void processElement(@Element Integer input, OutputReceiver<String> r) throws Exception {
+        r.output(input.toString());
+      }
+    };
+
+    for(Integer i = 0; i < partitionNum; i++) {
+      PCollection<String> output = outputs.get(i).apply("Converting Partition " + i.toString(), ParDo.of(fn));
+      PAssert.that(output).containsInAnyOrder(i.toString());
+    }
+    pipeline.run();
+  }
+
 }
