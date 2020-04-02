@@ -562,45 +562,45 @@ class OutputTimer(object):
   def __init__(self,
                key,
                window,  # type: windowed_value.BoundedWindow
-               receiver  # type: operations.ConsumerSet
+               paneinfo,
+               timer_family_id,
+               timer_coder_impl,
+               output_stream
               ):
     self._key = key
     self._window = window
-    self._receiver = receiver
+    self._paneinfo = paneinfo
+    self._timer_family_id = timer_family_id
+    self._output_stream = output_stream
+    self._timer_coder_impl = timer_coder_impl
 
   def set(self, ts):
     ts = timestamp.Timestamp.of(ts)
-    # TODO(BEAM-9562): Plumb through actual timer fields.
-    self._receiver.receive(
-        windowed_value.WindowedValue((
-            self._key,
-            userstate.Timer(
-                user_key='',
-                dynamic_timer_tag='',
-                windows=(self._window, ),
-                clear_bit=False,
-                fire_timestamp=ts,
-                hold_timestamp=ts,
-                paneinfo=windowed_value.PANE_INFO_UNKNOWN)),
-                                     ts, (self._window, )))
+    timer = userstate.Timer(
+        user_key=self._key,
+        dynamic_timer_tag='',
+        windows=(self._window, ),
+        clear_bit=False,
+        fire_timestamp=ts,
+        hold_timestamp=ts,
+        paneinfo=self._paneinfo)
+    self._timer_coder_impl.encode_to_stream(timer, self._output_stream, True)
+    self._output_stream.maybe_flush()
 
   def clear(self):
     # type: () -> None
     dummy_millis = int(common_urns.constants.MAX_TIMESTAMP_MILLIS.constant) + 1
     clear_ts = timestamp.Timestamp(micros=dummy_millis * 1000)
-    # TODO(BEAM-9562): Plumb through actual paneinfo.
-    self._receiver.receive(
-        windowed_value.WindowedValue((
-            self._key,
-            userstate.Timer(
-                user_key='',
-                dynamic_timer_tag='',
-                windows=(self._window, ),
-                clear_bit=False,
-                fire_timestamp=timestamp.Timestamp.of(clear_ts),
-                hold_timestamp=timestamp.Timestamp.of(0),
-                paneinfo=windowed_value.PANE_INFO_UNKNOWN)),
-                                     0, (self._window, )))
+    timer = userstate.Timer(
+        user_key=self._key,
+        dynamic_timer_tag='',
+        windows=(self._window, ),
+        clear_bit=False,
+        fire_timestamp=clear_ts,
+        hold_timestamp=clear_ts,
+        paneinfo=self._paneinfo)
+    self._timer_coder_imp.encode_to_stream(timer, self._output_stream, True)
+    self._output_stream.maybe_flush()
 
 
 class FnApiUserStateContext(userstate.UserStateContext):
@@ -611,7 +611,7 @@ class FnApiUserStateContext(userstate.UserStateContext):
                transform_id,  # type: str
                key_coder,  # type: coders.Coder
                window_coder,  # type: coders.Coder
-               timer_family_specs  # type: Mapping[str, beam_runner_api_pb2.TimerFamilySpec]
+               timer_coders
               ):
     # type: (...) -> None
 
@@ -629,28 +629,27 @@ class FnApiUserStateContext(userstate.UserStateContext):
     self._transform_id = transform_id
     self._key_coder = key_coder
     self._window_coder = window_coder
-    self._timer_family_specs = timer_family_specs
-    self._timer_receivers = None  # type: Optional[Dict[str, operations.ConsumerSet]]
+    # A mapping of {timer_family_id: OutputStream}
+    self._timer_output_streams = None
+    self._timer_coders = timer_coders
     self._all_states = {
     }  # type: Dict[tuple, userstate.AccumulatingRuntimeState]
 
-  def update_timer_receivers(self, receivers):
-    # type: (operations._TaggedReceivers) -> None
-
-    """TODO"""
-    self._timer_receivers = {}
-    for tag in self._timer_family_specs:
-      self._timer_receivers[tag] = receivers.pop(tag)
+  def update_timer_output_streams(self, output_streams):
+    self._timer_output_streams = output_streams
 
   def get_timer(
       self,
       timer_spec,
       key,
-      window  # type: windowed_value.BoundedWindow
-  ):
+      window,  # type: windowed_value.BoundedWindow
+      pane):
     # type: (...) -> OutputTimer
-    assert self._timer_receivers is not None
-    return OutputTimer(key, window, self._timer_receivers[timer_spec.name])
+    output_stream = self._timer_output_streams[timer_spec.name]
+    timer_coder_impl = self._timer_coders[timer_spec.name].get_impl()
+    assert output_stream is not None
+    return OutputTimer(
+        key, window, pane, timer_spec.name, timer_coder_impl, output_stream)
 
   def get_state(self, *args):
     state_handle = self._all_states.get(args)
@@ -745,6 +744,17 @@ class BundleProcessor(object):
     self.process_bundle_descriptor = process_bundle_descriptor
     self.state_handler = state_handler
     self.data_channel_factory = data_channel_factory
+
+    if self.process_bundle_descriptor.timer_api_service_descriptor:
+      self.timer_data_channel = data_channel_factory.create_data_channel_from_url(
+          self.process_bundle_descriptor.timer_api_service_descriptor.url)
+    else:
+      self.timer_data_channel = None
+    # A mapping of {transform_id: DoOperation} for DoFn which has timers.
+    self.process_timer_ops = {}
+    self.timer_coder = {}
+    self.timer_ids = {}
+
     # TODO(robertwb): Figure out the correct prefix to use for output counters
     # from StateSampler.
     self.counter_factory = counters.CounterFactory()
@@ -767,6 +777,9 @@ class BundleProcessor(object):
         self.counter_factory,
         self.state_sampler,
         self.state_handler)
+
+    self.timer_coder = transform_factory.get_timer_coders()
+    self.timer_ids = transform_factory.get_timer_ids()
 
     def is_side_input(transform_proto, tag):
       if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
@@ -802,10 +815,20 @@ class BundleProcessor(object):
           for consumer in pcoll_consumers[pcoll]
       ])
 
-    return collections.OrderedDict([
+    ops = collections.OrderedDict([
         (transform_id, get_operation(transform_id)) for transform_id in sorted(
             descriptor.transforms, key=topological_height, reverse=True)
     ])
+
+    # Collect all DoOperations which have timers.
+    for transform_id, transform_proto in descriptor.transforms.items():
+      if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
+        pardo_payload = proto_utils.parse_Bytes(
+            transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
+        if pardo_payload.timer_family_specs:
+          self.process_timer_ops[transform_id] = ops[transform_id]
+
+    return ops
 
   def reset(self):
     # type: () -> None
@@ -818,6 +841,7 @@ class BundleProcessor(object):
   def process_bundle(self, instruction_id):
     # type: (str) -> Tuple[List[beam_fn_api_pb2.DelayedBundleApplication], bool]
     expected_inputs = []
+
     for op in self.ops.values():
       if isinstance(op, DataOutputOperation):
         # TODO(robertwb): Is there a better way to pass the instruction id to
@@ -846,6 +870,30 @@ class BundleProcessor(object):
         data_channels[input_op.data_channel].append(input_op.transform_id)
         input_op_by_transform_id[input_op.transform_id] = input_op
 
+        # Set up timer output stream
+      timer_output_streams = {}
+      for transform_id, timer_list in self.timer_ids.items():
+        output_streams = {}
+        for timer_id in timer_list:
+          output_streams[
+              timer_id] = self.timer_data_channel.output_timer_stream(
+                  instruction_id, transform_id, timer_id)
+          timer_output_streams[transform_id] = output_streams
+        self.process_timer_ops[
+            transform_id].user_state_context.update_timer_output_streams(
+                output_streams)
+
+      # Process timers
+      if self.timer_data_channel:
+        for timer in self.timer_data_channel.input_timers(
+            instruction_id, self.process_timer_ops.keys()):
+          timer_coder = self.timer_coder[timer.transform_id][
+              timer.timer_family_id]
+          for timer_data in timer_coder.get_impl().decode_all(timer.timers):
+            self.process_timer_ops[timer.transform_id].process_timer(
+                timer.timer_family_id, timer_data)
+
+      # Process data inputs
       for data_channel, expected_transforms in data_channels.items():
         for data in data_channel.input_elements(instruction_id,
                                                 expected_transforms):
@@ -855,6 +903,12 @@ class BundleProcessor(object):
       for op in self.ops.values():
         _LOGGER.debug('finish %s', op)
         op.finish()
+
+      # Close timer stream per transform
+      for output_streams in timer_output_streams.values():
+        for stream in output_streams.values():
+          stream.close()
+          break
 
       return ([
           self.delayed_bundle_application(op, residual) for op,
@@ -1088,6 +1142,30 @@ class BeamTransformFactory(object):
         transform_proto.spec.payload, parameter_type)
     return creator(self, transform_id, transform_proto, payload, consumers)
 
+  def get_timer_coders(self):
+    timer_coder = {}
+    for transform_id, transform_proto in self.descriptor.transforms.items():
+      if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
+        pardo_payload = proto_utils.parse_Bytes(
+            transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
+        coder = {}
+        for id, timer_family_spec in pardo_payload.timer_family_specs.items():
+          coder[id] = self.get_coder(timer_family_spec.timer_family_coder_id)
+        if coder:
+          timer_coder[transform_id] = coder
+    return timer_coder
+
+  def get_timer_ids(self):
+    timer_ids = {}
+    for transform_id, transform_proto in self.descriptor.transforms.items():
+      if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
+        pardo_payload = proto_utils.parse_Bytes(
+            transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
+        if pardo_payload.timer_family_specs:
+          timer_ids[transform_id] = list(
+              pardo_payload.timer_family_specs.keys())
+    return timer_ids
+
   def get_coder(self, coder_id):
     # type: (str) -> coders.Coder
     if coder_id not in self.descriptor.coders:
@@ -1157,16 +1235,6 @@ class BeamTransformFactory(object):
     return op
 
 
-class TimerConsumer(operations.Operation):
-  def __init__(self, timer_tag, do_op):
-    self._timer_tag = timer_tag
-    self._do_op = do_op
-
-  def process(self, windowed_value):
-    # type: (windowed_value.WindowedValue) -> None
-    self._do_op.process_timer(self._timer_tag, windowed_value)
-
-
 @BeamTransformFactory.register_urn(
     DATA_INPUT_URN, beam_fn_api_pb2.RemoteGrpcPort)
 def create_source_runner(
@@ -1177,18 +1245,6 @@ def create_source_runner(
     consumers  # type: Dict[str, List[operations.Operation]]
 ):
   # type: (...) -> DataInputOperation
-  # Timers are the one special case where we don't want to call the
-  # (unlabeled) operation.process() method, which we detect here.
-  # TODO(robertwb): Consider generalizing if there are any more cases.
-  output_pcoll = only_element(transform_proto.outputs.values())
-  output_consumers = only_element(consumers.values())
-  if len(output_consumers) == 1:
-    do_op = only_element(output_consumers)
-    if isinstance(do_op, operations.DoOperation):
-      for tag, pcoll_id in do_op.timer_inputs.items():
-        if pcoll_id == output_pcoll:
-          output_consumers[:] = [TimerConsumer(tag, do_op)]
-          break
 
   output_coder = factory.get_coder(grpc_port.coder_id)
   return DataInputOperation(
@@ -1461,15 +1517,11 @@ def _create_pardo_operation(
         factory.descriptor.pcollections[pcoll_id].windowing_strategy_id)
     serialized_fn = pickler.dumps(dofn_data[:-1] + (windowing, ))
 
-  timer_inputs = None  # type: Optional[Dict[str, str]]
   if pardo_proto and (pardo_proto.timer_family_specs or pardo_proto.state_specs
                       or pardo_proto.restriction_coder_id):
     main_input_coder = None  # type: Optional[WindowedValueCoder]
-    timer_inputs = {}
     for tag, pcoll_id in transform_proto.inputs.items():
-      if tag in pardo_proto.timer_family_specs:
-        timer_inputs[tag] = pcoll_id
-      elif tag in pardo_proto.side_inputs:
+      if tag in pardo_proto.side_inputs:
         pass
       else:
         # Must be the main input
@@ -1484,8 +1536,8 @@ def _create_pardo_operation(
           transform_id,
           main_input_coder.key_coder(),
           main_input_coder.window_coder,
-          timer_family_specs=pardo_proto.timer_family_specs
-      )  # type: Optional[FnApiUserStateContext]
+          factory.get_timer_coders().get(
+              transform_id, None))  # type: Optional[FnApiUserStateContext]
     else:
       user_state_context = None
   else:
@@ -1506,8 +1558,7 @@ def _create_pardo_operation(
           factory.counter_factory,
           factory.state_sampler,
           side_input_maps,
-          user_state_context,
-          timer_inputs=timer_inputs),
+          user_state_context),
       transform_proto.unique_name,
       consumers,
       output_tags)

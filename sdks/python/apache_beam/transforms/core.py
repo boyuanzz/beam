@@ -34,6 +34,7 @@ from builtins import range
 from past.builtins import unicode
 
 from apache_beam import coders
+from apache_beam.coders import coders as c
 from apache_beam import pvalue
 from apache_beam import typehints
 from apache_beam.coders import typecoders
@@ -71,6 +72,7 @@ from apache_beam.typehints.typehints import is_consistent_with
 from apache_beam.utils import proto_utils
 from apache_beam.utils import urns
 from apache_beam.utils.timestamp import Duration
+from google.protobuf import message
 
 if typing.TYPE_CHECKING:
   from google.protobuf import message  # pylint: disable=ungrouped-imports
@@ -395,7 +397,7 @@ class RunnerAPIPTransformHolder(PTransform):
     """Runner API payload for a `PTransform`"""
     return self._proto
 
-  def to_runner_api(self, context, has_parts=False):
+  def to_runner_api(self, context, **extra_kwargs):
     # TODO(BEAM-7850): no need to copy around Environment if it is a direct
     #  attribute of PTransform.
     id_to_proto_map = self._context.environments.get_id_to_proto_map()
@@ -1272,6 +1274,8 @@ class ParDo(PTransformWithSideInputs):
         key_coder = coder.key_coder()
       else:
         key_coder = coders.registry.get_coder(typehints.Any)
+      self.window_coder = pcoll.windowing.windowfn.get_window_coder()
+      self.key_coder = key_coder
 
       if not key_coder.is_deterministic():
         _LOGGER.warning(
@@ -1323,12 +1327,50 @@ class ParDo(PTransformWithSideInputs):
     windowing = None
     return self.fn, self.args, self.kwargs, si_tags_and_types, windowing
 
-  def to_runner_api_parameter(self, context):
+  def _get_key_and_window_coder(self, named_inputs):
+    if named_inputs is None or not self._signature.is_stateful_dofn():
+      return None, None
+    main_input = list(set(named_inputs.keys()) - set(self.side_inputs))[0]
+    input_pcoll = named_inputs[main_input]
+    kv_type_hint = input_pcoll.element_type
+    if kv_type_hint and kv_type_hint != typehints.Any:
+      coder = coders.registry.get_coder(kv_type_hint)
+      if not coder.is_kv_coder():
+        raise ValueError(
+            'Input elements to the transform %s with stateful DoFn must be '
+            'key-value pairs.' % self)
+      key_coder = coder.key_coder()
+    else:
+      key_coder = coders.registry.get_coder(typehints.Any)
+    window_coder = input_pcoll.windowing.windowfn.get_window_coder()
+    return key_coder, window_coder
+
+  def to_runner_api(self, context, **extra_kwargs):
+    # type: (PipelineContext, bool) -> beam_runner_api_pb2.FunctionSpec
+    has_parts = extra_kwargs.get('has_part', False)
+
+    from apache_beam.portability.api import beam_runner_api_pb2
+
+    urn, typed_param = self.to_runner_api_parameter(context, **extra_kwargs)
+    if urn == python_urns.GENERIC_COMPOSITE_TRANSFORM and not has_parts:
+      # TODO(BEAM-3812): Remove this fallback.
+      urn, typed_param = self.to_runner_api_pickled(context)
+    return beam_runner_api_pb2.FunctionSpec(
+        urn=urn,
+        payload=typed_param.SerializeToString() if isinstance(
+            typed_param, message.Message) else typed_param.encode('utf-8')
+        if isinstance(typed_param, str) else typed_param)
+
+  def to_runner_api_parameter(self, context, **extra_kwargs):
     # type: (PipelineContext) -> typing.Tuple[str, message.Message]
     assert isinstance(self, ParDo), \
         "expected instance of ParDo, but got %s" % self.__class__
+    key_coder, window_coder = self._get_key_and_window_coder(
+        extra_kwargs.get('named_inputs', None))
     picked_pardo_fn_data = pickler.dumps(self._pardo_fn_data())
     state_specs, timer_specs = userstate.get_dofn_specs(self.fn)
+    if timer_specs:
+      assert (key_coder and window_coder)
     if state_specs or timer_specs:
       context.add_requirement(
           common_urns.requirements.REQUIRES_STATEFUL_PROCESSING.urn)
@@ -1360,7 +1402,7 @@ class ParDo(PTransformWithSideInputs):
                 for spec in state_specs
             },
             timer_family_specs={
-                spec.name: spec.to_runner_api(context)
+                spec.name: spec.to_runner_api(context, key_coder, window_coder)
                 for spec in timer_specs
             },
             # It'd be nice to name these according to their actual
@@ -1961,7 +2003,7 @@ class CombinePerKey(PTransformWithSideInputs):
 
   def to_runner_api_parameter(
       self,
-      context  # type: PipelineContext
+      context,  # type: PipelineContext
   ):
     # type: (...) -> typing.Tuple[str, beam_runner_api_pb2.CombinePayload]
     if self.args or self.kwargs:
@@ -2535,7 +2577,7 @@ class WindowInto(ParDo):
       self.with_output_types(output_type)
     return super(WindowInto, self).expand(pcoll)
 
-  def to_runner_api_parameter(self, context):
+  def to_runner_api_parameter(self, context, **extra_kwargs):
     # type: (PipelineContext) -> typing.Tuple[str, message.Message]
     return (
         common_urns.primitives.ASSIGN_WINDOWS.urn,
