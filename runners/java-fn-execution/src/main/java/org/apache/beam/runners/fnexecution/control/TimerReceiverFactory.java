@@ -17,6 +17,8 @@
  */
 package org.apache.beam.runners.fnexecution.control;
 
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkNotNull;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -28,62 +30,64 @@ import org.apache.beam.runners.core.construction.Timer;
 import org.apache.beam.runners.fnexecution.control.ProcessBundleDescriptors.TimerSpec;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.fn.data.FnDataReceiver;
-import org.apache.beam.sdk.state.TimeDomain;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.KV;
-import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * {@link OutputReceiverFactory} that passes outputs to {@link
- * TimerReceiverFactory#timerDataConsumer}.
+ * A factory that passes timers to {@link TimerReceiverFactory#timerDataConsumer}.
+ *
+ * <p>The constructed timers use the transform id as the timer id and the timer family id as the
+ * timer family id.
  */
-public class TimerReceiverFactory implements OutputReceiverFactory {
+public class TimerReceiverFactory {
   private static final Logger LOG = LoggerFactory.getLogger(TimerReceiverFactory.class);
 
-  /** Timer PCollection id => TimerReference. */
-  private final HashMap<String, TimerSpec> timerOutputIdToSpecMap;
+  /** (PTransform, Timer Local Name) => TimerReference. */
+  private final HashMap<KV<String, String>, TimerSpec> transformAndTimerIdToSpecMap;
 
-  private final BiConsumer<WindowedValue, TimerData> timerDataConsumer;
+  private final BiConsumer<Timer<?>, TimerData> timerDataConsumer;
   private final Coder windowCoder;
 
   public TimerReceiverFactory(
       StageBundleFactory stageBundleFactory,
-      BiConsumer<WindowedValue, TimerInternals.TimerData> timerDataConsumer,
+      BiConsumer<Timer<?>, TimerInternals.TimerData> timerDataConsumer,
       Coder windowCoder) {
-    this.timerOutputIdToSpecMap = new HashMap<>();
-    // Gather all timers from all transforms by their output pCollectionId which is unique
+    this.transformAndTimerIdToSpecMap = new HashMap<>();
+    // Create a lookup map using the transform and timerId as the key.
     for (Map<String, ProcessBundleDescriptors.TimerSpec> transformTimerMap :
         stageBundleFactory.getProcessBundleDescriptor().getTimerSpecs().values()) {
       for (ProcessBundleDescriptors.TimerSpec timerSpec : transformTimerMap.values()) {
-        timerOutputIdToSpecMap.put(timerSpec.outputCollectionId(), timerSpec);
+        transformAndTimerIdToSpecMap.put(
+            KV.of(timerSpec.transformId(), timerSpec.timerId()), timerSpec);
       }
     }
     this.timerDataConsumer = timerDataConsumer;
     this.windowCoder = windowCoder;
   }
 
-  @Override
-  public <OutputT> FnDataReceiver<OutputT> create(String pCollectionId) {
-    final ProcessBundleDescriptors.TimerSpec timerSpec = timerOutputIdToSpecMap.get(pCollectionId);
+  // @Override
+  public <K> FnDataReceiver<Timer<K>> create(String transformId, String timerFamilyId) {
+    final ProcessBundleDescriptors.TimerSpec timerSpec =
+        transformAndTimerIdToSpecMap.get(KV.of(transformId, timerFamilyId));
 
     return receivedElement -> {
-      WindowedValue windowedValue = (WindowedValue) receivedElement;
       Timer timer =
-          Preconditions.checkNotNull(
-              (Timer) ((KV) windowedValue.getValue()).getValue(),
-              "Received null Timer from SDK harness: %s",
-              receivedElement);
-      LOG.debug("Timer received: {} {}", pCollectionId, timer);
-      for (Object window : windowedValue.getWindows()) {
+          checkNotNull(
+              receivedElement, "Received null Timer from SDK harness: %s", receivedElement);
+      LOG.debug("Timer received: {}", timer);
+      for (Object window : timer.getWindows()) {
         StateNamespace namespace = StateNamespaces.window(windowCoder, (BoundedWindow) window);
-        TimeDomain timeDomain = timerSpec.getTimerSpec().getTimeDomain();
-        String timerId = timerSpec.inputCollectionId();
         TimerInternals.TimerData timerData =
-            TimerInternals.TimerData.of(timerId, namespace, timer.getFireTimestamp(), timeDomain);
-        timerDataConsumer.accept(windowedValue, timerData);
+            TimerInternals.TimerData.of(
+                timerSpec.transformId(),
+                timerSpec.timerId(),
+                namespace,
+                timer.getFireTimestamp(),
+                timer.getHoldTimestamp(),
+                timerSpec.getTimerSpec().getTimeDomain());
+        timerDataConsumer.accept(timer, timerData);
       }
     };
   }

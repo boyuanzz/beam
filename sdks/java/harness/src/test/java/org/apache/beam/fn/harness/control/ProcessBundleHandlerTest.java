@@ -50,6 +50,7 @@ import org.apache.beam.fn.harness.control.FinalizeBundleHandler.CallbackRegistra
 import org.apache.beam.fn.harness.control.ProcessBundleHandler.BundleProcessor;
 import org.apache.beam.fn.harness.control.ProcessBundleHandler.BundleProcessorCache;
 import org.apache.beam.fn.harness.data.BeamFnDataClient;
+import org.apache.beam.fn.harness.data.BeamFnTimerClient;
 import org.apache.beam.fn.harness.data.PCollectionConsumerRegistry;
 import org.apache.beam.fn.harness.data.PTransformFunctionRegistry;
 import org.apache.beam.fn.harness.data.QueueingBeamFnDataClient;
@@ -272,6 +273,7 @@ public class ProcessBundleHandlerTest {
         (pipelineOptions,
             beamFnDataClient,
             beamFnStateClient,
+            beamFnTimerClient,
             pTransformId,
             pTransform,
             processBundleInstructionId,
@@ -403,6 +405,7 @@ public class ProcessBundleHandlerTest {
         (pipelineOptions,
             beamFnDataClient,
             beamFnStateClient,
+            beamFnTimerClient,
             pTransformId,
             pTransform,
             processBundleInstructionId,
@@ -474,6 +477,7 @@ public class ProcessBundleHandlerTest {
                 (pipelineOptions,
                     beamFnDataClient,
                     beamFnStateClient,
+                    beamFnTimerClient,
                     pTransformId,
                     pTransform,
                     processBundleInstructionId,
@@ -584,6 +588,7 @@ public class ProcessBundleHandlerTest {
                 (pipelineOptions,
                     beamFnDataClient,
                     beamFnStateClient,
+                    beamFnTimerClient,
                     pTransformId,
                     pTransform,
                     processBundleInstructionId,
@@ -635,6 +640,7 @@ public class ProcessBundleHandlerTest {
                     (pipelineOptions,
                         beamFnDataClient,
                         beamFnStateClient,
+                        beamFnTimerClient,
                         pTransformId,
                         pTransform,
                         processBundleInstructionId,
@@ -701,6 +707,7 @@ public class ProcessBundleHandlerTest {
                     (pipelineOptions,
                         beamFnDataClient,
                         beamFnStateClient,
+                        beamFnTimerClient,
                         pTransformId,
                         pTransform,
                         processBundleInstructionId,
@@ -757,6 +764,7 @@ public class ProcessBundleHandlerTest {
                     (pipelineOptions,
                         beamFnDataClient,
                         beamFnStateClient,
+                        beamFnTimerClient,
                         pTransformId,
                         pTransform,
                         processBundleInstructionId,
@@ -851,6 +859,7 @@ public class ProcessBundleHandlerTest {
                       PipelineOptions pipelineOptions,
                       BeamFnDataClient beamFnDataClient,
                       BeamFnStateClient beamFnStateClient,
+                      BeamFnTimerClient beamFnTimerClient,
                       String pTransformId,
                       PTransform pTransform,
                       Supplier<String> processBundleInstructionId,
@@ -914,6 +923,7 @@ public class ProcessBundleHandlerTest {
                       PipelineOptions pipelineOptions,
                       BeamFnDataClient beamFnDataClient,
                       BeamFnStateClient beamFnStateClient,
+                      BeamFnTimerClient beamFnTimerClient,
                       String pTransformId,
                       PTransform pTransform,
                       Supplier<String> processBundleInstructionId,
