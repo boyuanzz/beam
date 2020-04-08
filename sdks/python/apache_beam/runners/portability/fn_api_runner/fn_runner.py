@@ -817,9 +817,6 @@ class BundleManager(object):
           process_bundle_id, transform_id, timer_family_id)
       for timer in timers:
         timer_out.write(timer)
-
-    # Close the output stream per transform.
-    if timer_out is not None:
       timer_out.close()
 
   def _register_bundle_descriptor(self):
@@ -981,9 +978,13 @@ class BundleManager(object):
                 output.transform_id).append(output.data)
       # Gather all output timers
       if expected_output_timers:
+        expected_timers = set()
+        for transform_id, timer_ids in expected_output_timers.items():
+          for timer_id in timer_ids:
+            expected_timers.add((transform_id, timer_id))
         for output_timer in self._worker_handler.data_conn.input_timers(
             process_bundle_id,
-            expected_output_timers.keys(),
+            expected_timers,
             abort_callback=lambda:
             (result_future.is_done() and result_future.get().error)):
           if output_timer.transform_id in expected_output_timers:

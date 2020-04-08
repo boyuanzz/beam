@@ -214,7 +214,6 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
                                             timer_family_id)
     out1.write(...)
     out1.close()
-  Note that the timer_stream.close should be called per transform.
 
   When all data/timer for all instructions is written, close the channel::
 
@@ -244,7 +243,7 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
   @abc.abstractmethod
   def input_timers(self,
       instruction_id,  # type: str
-      expected_transforms,  # type: Collection[str]
+      expected_timers,  # type: Collection[str]
       abort_callback=None  # type: Optional[Callable[[], bool]]
                    ):
     # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Timer]
@@ -345,7 +344,7 @@ class InMemoryDataChannel(DataChannel):
   def input_timers(
       self,
       instruction_id,
-      unused_expected_transforms=None,
+      expected_timers=None,
       abort_callback=None):
     other_input_timers = []
     for timer in self._timer_inputs:
@@ -447,13 +446,13 @@ class _GrpcDataChannel(DataChannel):
       self._received_timers.pop(instruction_id)
 
   def input_timers(
-      self, instruction_id, expected_transforms, abort_callback=None):
+      self, instruction_id, expected_timers, abort_callback=None):
     instruction_id = instruction_id
     received_timer = self._receiving_timer_queue(instruction_id)
-    done_transforms = set()
+    done_timers = set()
     abort_callback = abort_callback or (lambda: False)
     try:
-      while len(done_transforms) < len(expected_transforms):
+      while len(done_timers) < len(expected_timers):
         try:
           timer = received_timer.get(timeout=1)
         except queue.Empty:
@@ -466,7 +465,7 @@ class _GrpcDataChannel(DataChannel):
             raise_(t, v, tb)
         else:
           if timer.is_last:
-            done_transforms.add(timer.transform_id)
+            done_timers.add((timer.transform_id, timer.timer_family_id))
           else:
             yield timer
     finally:
@@ -556,7 +555,7 @@ class _GrpcDataChannel(DataChannel):
           beam_fn_api_pb2.Elements.Timer(
               instruction_id=instruction_id,
               transform_id=transform_id,
-              timer_family_id='',
+              timer_family_id=timer_family_id,
               timers=b'',
               is_last=True))
 

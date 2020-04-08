@@ -885,8 +885,12 @@ class BundleProcessor(object):
 
       # Process timers
       if self.timer_data_channel:
+        expected_timers = set()
+        for transform_id, timer_ids in self.timer_ids.items():
+          for timer_id in timer_ids:
+            expected_timers.add((transform_id, timer_id))
         for timer in self.timer_data_channel.input_timers(
-            instruction_id, self.process_timer_ops.keys()):
+            instruction_id, expected_timers):
           timer_coder = self.timer_coder[timer.transform_id][
               timer.timer_family_id]
           for timer_data in timer_coder.get_impl().decode_all(timer.timers):
@@ -904,11 +908,10 @@ class BundleProcessor(object):
         _LOGGER.debug('finish %s', op)
         op.finish()
 
-      # Close timer stream per transform
+      # Close timer stream per timer_family_id per transform_id.
       for output_streams in timer_output_streams.values():
         for stream in output_streams.values():
           stream.close()
-          break
 
       return ([
           self.delayed_bundle_application(op, residual) for op,
