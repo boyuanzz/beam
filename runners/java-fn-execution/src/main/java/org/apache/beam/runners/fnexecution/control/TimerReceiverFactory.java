@@ -38,8 +38,12 @@ import org.slf4j.LoggerFactory;
 /**
  * A factory that passes timers to {@link TimerReceiverFactory#timerDataConsumer}.
  *
- * <p>The constructed timers use the transform id as the timer id and the timer family id as the
- * timer family id.
+ * <p>The constructed timers uses {@code len(transformId):transformId:timerId} as the timer id to
+ * prevent string collisions. See {@link #encodeToTimerDataTimerId} and {@link
+ * #decodeTimerDataTimerId} for functions to aid with encoding and decoding.
+ *
+ * <p>If the incoming timer is being cleared, the {@link TimerData} sets the fire and hold
+ * timestamps to {@link BoundedWindow#TIMESTAMP_MAX_VALUE}.
  */
 public class TimerReceiverFactory {
   private static final Logger LOG = LoggerFactory.getLogger(TimerReceiverFactory.class);
@@ -81,14 +85,43 @@ public class TimerReceiverFactory {
         StateNamespace namespace = StateNamespaces.window(windowCoder, (BoundedWindow) window);
         TimerInternals.TimerData timerData =
             TimerInternals.TimerData.of(
-                timerSpec.transformId(),
-                timerSpec.timerId(),
+                encodeToTimerDataTimerId(timerSpec.transformId(), timerSpec.timerId()),
                 namespace,
-                timer.getFireTimestamp(),
-                timer.getHoldTimestamp(),
+                timer.getClearBit() ? BoundedWindow.TIMESTAMP_MAX_VALUE : timer.getFireTimestamp(),
+                timer.getClearBit() ? BoundedWindow.TIMESTAMP_MAX_VALUE : timer.getHoldTimestamp(),
                 timerSpec.getTimerSpec().getTimeDomain());
         timerDataConsumer.accept(timer, timerData);
       }
     };
+  }
+
+  /**
+   * Encodes transform and timer family ids into a single string which retains the human readable
+   * format {@code len(transformId):transformId:timerId}. See {@link #decodeTimerDataTimerId} for
+   * decoding.
+   */
+  public static String encodeToTimerDataTimerId(String transformId, String timerFamilyId) {
+    return transformId.length() + ":" + transformId + ":" + timerFamilyId;
+  }
+
+  /**
+   * Decodes a string into the transform and timer family ids. See {@link #encodeToTimerDataTimerId}
+   * for encoding.
+   */
+  public static KV<String, String> decodeTimerDataTimerId(String timerDataTimerId) {
+    int transformIdLengthSplit = timerDataTimerId.indexOf(":");
+    if (transformIdLengthSplit <= 0) {
+      throw new IllegalArgumentException(
+          String.format(
+              "Invalid encoding, expected len(transformId):transformId:timerId as the encoding but received %s",
+              timerDataTimerId));
+    }
+    int transformIdLength = Integer.parseInt(timerDataTimerId.substring(0, transformIdLengthSplit));
+    String transformId =
+        timerDataTimerId.substring(
+            transformIdLengthSplit + 1, transformIdLengthSplit + 1 + transformIdLength);
+    String timerFamilyId =
+        timerDataTimerId.substring(transformIdLengthSplit + 1 + transformIdLength + 1);
+    return KV.of(transformId, timerFamilyId);
   }
 }

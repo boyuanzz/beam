@@ -439,20 +439,18 @@ public class ExecutableStageDoFnOperator<InputT, OutputT> extends DoFnOperator<I
   private void setTimer(Timer<?> timerElement, TimerInternals.TimerData timerData) {
     try {
       LOG.debug("Setting timer: {} {}", timerElement, timerData);
-      // KvToByteBufferKeySelector returns the key encoded
+      // KvToByteBufferKeySelector returns the key encoded, it doesn't care about the
+      // window, timestamp or pane information.
       ByteBuffer encodedKey =
           (ByteBuffer)
               keySelector.getKey(
-                  WindowedValue.of(
-                      (InputT) KV.of(timerElement.getUserKey(), null),
-                      timerElement.getHoldTimestamp(),
-                      timerElement.getWindows(),
-                      timerElement.getPane()));
+                  WindowedValue.valueInGlobalWindow(
+                      (InputT) KV.of(timerElement.getUserKey(), null)));
       // We have to synchronize to ensure the state backend is not concurrently accessed by the
       // state requests
       try (Locker locker = Locker.locked(stateBackendLock)) {
         getKeyedStateBackend().setCurrentKey(encodedKey);
-        if (timerData.getTimestamp().isAfter(BoundedWindow.TIMESTAMP_MAX_VALUE)) {
+        if (timerElement.getClearBit()) {
           timerInternals.deleteTimer(
               timerData.getNamespace(), timerData.getTimerId(), timerData.getDomain());
         } else {
@@ -659,7 +657,7 @@ public class ExecutableStageDoFnOperator<InputT, OutputT> extends DoFnOperator<I
 
     @Override
     public void onTimer(
-        String transformId,
+        String timerId,
         String timerFamilyId,
         BoundedWindow window,
         Instant timestamp,
@@ -668,19 +666,21 @@ public class ExecutableStageDoFnOperator<InputT, OutputT> extends DoFnOperator<I
       Object timerKey = keyForTimer.get();
       Preconditions.checkNotNull(timerKey, "Key for timer needs to be set before calling onTimer");
       Preconditions.checkNotNull(remoteBundle, "Call to onTimer outside of a bundle");
+      KV<String, String> transformAndTimerFamilyId =
+          TimerReceiverFactory.decodeTimerDataTimerId(timerId);
       LOG.debug(
           "timer callback: {} {} {} {} {}",
-          transformId,
-          timerFamilyId,
+          transformAndTimerFamilyId.getKey(),
+          transformAndTimerFamilyId.getValue(),
           window,
           timestamp,
           timeDomain);
       FnDataReceiver<Timer> timerReceiver =
           Preconditions.checkNotNull(
-              remoteBundle.getTimerReceivers().get(KV.of(transformId, timerFamilyId)),
+              remoteBundle.getTimerReceivers().get(transformAndTimerFamilyId),
               "No receiver found for timer %s %s",
-              transformId,
-              timerFamilyId);
+              transformAndTimerFamilyId.getKey(),
+              transformAndTimerFamilyId.getValue());
       Timer<?> timerValue =
           Timer.of(
               timerKey,
