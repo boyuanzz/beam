@@ -398,10 +398,10 @@ public class ProcessBundleHandler {
     // Instantiate a Timer client registration handler depending on whether a Timer
     // ApiServiceDescriptor was specified.
     BeamFnTimerClient beamFnTimerClient =
-        bundleDescriptor.getTimerApiServiceDescriptor() == null
-            ? new FailAllTimerRegistrations(processBundleRequest)
-            : new BeamFnTimerGrpcClient(
-                queueingClient, bundleDescriptor.getTimerApiServiceDescriptor());
+        bundleDescriptor.hasTimerApiServiceDescriptor()
+            ? new BeamFnTimerGrpcClient(
+                queueingClient, bundleDescriptor.getTimerApiServiceDescriptor())
+            : new FailAllTimerRegistrations(processBundleRequest);
 
     Multimap<String, DelayedBundleApplication> allResiduals = ArrayListMultimap.create();
     Multimap<String, BundleApplication> allPrimaries = ArrayListMultimap.create();
