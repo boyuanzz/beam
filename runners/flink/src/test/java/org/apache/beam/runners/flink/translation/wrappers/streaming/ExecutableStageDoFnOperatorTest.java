@@ -614,8 +614,8 @@ public class ExecutableStageDoFnOperatorTest {
     // user timer that fires after the end of the window and after state cleanup
     TimerInternals.TimerData userTimer =
         TimerInternals.TimerData.of(
-            timerInputKey.getKey(),
-            timerInputKey.getValue(),
+            TimerReceiverFactory.encodeToTimerDataTimerId(
+                timerInputKey.getKey(), timerInputKey.getValue()),
             stateNamespace,
             window.maxTimestamp().plus(1),
             TimeDomain.EVENT_TIME);

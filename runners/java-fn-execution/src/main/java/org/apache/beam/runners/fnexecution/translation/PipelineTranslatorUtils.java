@@ -33,6 +33,7 @@ import org.apache.beam.runners.core.construction.RehydratedComponents;
 import org.apache.beam.runners.core.construction.Timer;
 import org.apache.beam.runners.core.construction.WindowingStrategyTranslation;
 import org.apache.beam.runners.core.construction.graph.PipelineNode;
+import org.apache.beam.runners.fnexecution.control.TimerReceiverFactory;
 import org.apache.beam.runners.fnexecution.wire.WireCoders;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
@@ -148,6 +149,7 @@ public final class PipelineTranslatorUtils {
             timestamp,
             outputTimestamp,
             PaneInfo.NO_FIRING);
-    timerConsumer.accept(KV.of(timer.getTimerId(), timer.getTimerFamilyId()), timerValue);
+    timerConsumer.accept(
+        TimerReceiverFactory.decodeTimerDataTimerId(timer.getTimerId()), timerValue);
   }
 }
