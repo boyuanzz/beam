@@ -599,7 +599,7 @@ class OutputTimer(object):
         fire_timestamp=clear_ts,
         hold_timestamp=clear_ts,
         paneinfo=self._paneinfo)
-    self._timer_coder_imp.encode_to_stream(timer, self._output_stream, True)
+    self._timer_coder_impl.encode_to_stream(timer, self._output_stream, True)
     self._output_stream.maybe_flush()
 
 
