@@ -92,7 +92,7 @@ cdef class DoOperation(Operation):
   cdef DoFnRunner dofn_runner
   cdef object tagged_receivers
   cdef object side_input_maps
-  cdef object user_state_context
+  cpdef public object user_state_context
   cdef public dict timer_inputs
   cdef dict timer_specs
   cdef public object input_info
