@@ -931,7 +931,8 @@ class BundleManager(object):
         self._send_timers_to_worker(
             process_bundle_id, transform_id, timer_family_id, timers)
 
-      for transform_id, timer_family_id in (set(expected_output_timers.keys())):
+      for transform_id, timer_family_id in (
+          set(expected_output_timers.keys()) - set(fired_timers.keys())):
         # Close the stream if there is no timers to be sent.
         self._send_timers_to_worker(
             process_bundle_id, transform_id, timer_family_id, [])
