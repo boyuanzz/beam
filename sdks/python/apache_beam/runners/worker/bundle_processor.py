@@ -861,7 +861,7 @@ class BundleProcessor(object):
         op.execution_context = execution_context
         op.start()
 
-      # Inject inputs from data plane.
+      # Inject data inputs from data plane.
       data_channels = collections.defaultdict(
           list
       )  # type: DefaultDict[data_plane.GrpcClientDataChannel, List[str]]
@@ -870,7 +870,15 @@ class BundleProcessor(object):
         data_channels[input_op.data_channel].append(input_op.transform_id)
         input_op_by_transform_id[input_op.transform_id] = input_op
 
-        # Set up timer output stream
+      # Inject timer inputs from data_plane
+      if self.timer_data_channel:
+        expected_timers = []
+        for transform_id, timer_ids in self.timer_ids.items():
+          for timer_id in timer_ids:
+            expected_timers.append((transform_id, timer_id))
+        data_channels[self.timer_data_channel].extend(expected_timers)
+
+      # Set up timer output stream
       timer_output_streams = {}
       for transform_id, timer_list in self.timer_ids.items():
         output_streams = {}
@@ -883,25 +891,18 @@ class BundleProcessor(object):
             transform_id].user_state_context.update_timer_output_streams(
                 output_streams)
 
-      # Process timers
-      if self.timer_data_channel:
-        expected_timers = set()
-        for transform_id, timer_ids in self.timer_ids.items():
-          for timer_id in timer_ids:
-            expected_timers.add((transform_id, timer_id))
-        for timer in self.timer_data_channel.input_timers(
-            instruction_id, expected_timers):
-          timer_coder = self.timer_coder[timer.transform_id][
-              timer.timer_family_id]
-          for timer_data in timer_coder.get_impl().decode_all(timer.timers):
-            self.process_timer_ops[timer.transform_id].process_timer(
-                timer.timer_family_id, timer_data)
-
-      # Process data inputs
-      for data_channel, expected_transforms in data_channels.items():
-        for data in data_channel.input_elements(instruction_id,
-                                                expected_transforms):
-          input_op_by_transform_id[data.transform_id].process_encoded(data.data)
+      # Process data and timer inputs
+      for data_channel, expected_inputs in data_channels.items():
+        for element in data_channel.input_elements(instruction_id,
+                                                   expected_inputs):
+          if isinstance(element, beam_fn_api_pb2.Elements.Timer):
+            timer_coder = self.timer_coder[element.transform_id][
+              element.timer_family_id]
+            for timer_data in timer_coder.get_impl().decode_all(element.timers):
+              self.process_timer_ops[element.transform_id].process_timer(
+                  element.timer_family_id, timer_data)
+          if isinstance(element, beam_fn_api_pb2.Elements.Data):
+            input_op_by_transform_id[element.transform_id].process_encoded(element.data)
 
       # Finish all operations.
       for op in self.ops.values():

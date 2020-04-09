@@ -965,34 +965,30 @@ class BundleManager(object):
         split_results = self._generate_splits_for_testing(
             split_manager, inputs, process_bundle_id)
 
+      expected_timers = []
+      for transform_id, timer_ids in expected_output_timers.items():
+        for timer_id in timer_ids:
+          expected_timers.append((transform_id, timer_id))
+      expect_inputs = list(expected_outputs.keys())
+      expect_inputs.extend(expected_timers)
+
       # Gather all output data.
       for output in self._worker_handler.data_conn.input_elements(
           process_bundle_id,
-          expected_outputs.keys(),
+          expect_inputs,
           abort_callback=lambda:
           (result_future.is_done() and result_future.get().error)):
-        if output.transform_id in expected_outputs:
+        if isinstance(output, beam_fn_api_pb2.Elements.Timer):
+          with BundleManager._lock:
+            self._get_buffer(
+                expected_output_timers[output.transform_id][
+                  output.timer_family_id],
+                output.transform_id).append(output.timers)
+        if isinstance(output, beam_fn_api_pb2.Elements.Data):
           with BundleManager._lock:
             self._get_buffer(
                 expected_outputs[output.transform_id],
                 output.transform_id).append(output.data)
-      # Gather all output timers
-      if expected_output_timers:
-        expected_timers = set()
-        for transform_id, timer_ids in expected_output_timers.items():
-          for timer_id in timer_ids:
-            expected_timers.add((transform_id, timer_id))
-        for output_timer in self._worker_handler.data_conn.input_timers(
-            process_bundle_id,
-            expected_timers,
-            abort_callback=lambda:
-            (result_future.is_done() and result_future.get().error)):
-          if output_timer.transform_id in expected_output_timers:
-            with BundleManager._lock:
-              self._get_buffer(
-                  expected_output_timers[output_timer.transform_id][
-                      output_timer.timer_family_id],
-                  output_timer.transform_id).append(output_timer.timers)
 
       _LOGGER.debug('Wait for the bundle %s to finish.' % process_bundle_id)
       result = result_future.get()  # type: beam_fn_api_pb2.InstructionResponse

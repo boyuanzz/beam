@@ -189,10 +189,10 @@ class PeriodicThread(threading.Thread):
 class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
   """Represents a channel for reading and writing data over the data plane.
 
-  Read data from this channel with the input_elements method::
+  Read data and timer from this channel with the input_elements method::
 
     for elements_data in data_channel.input_elements(
-        instruction_id, transform_ids):
+        instruction_id, transform_ids, timers):
       [process elements_data]
 
   Write data to this channel using the output_stream method::
@@ -200,12 +200,6 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
     out1 = data_channel.output_stream(instruction_id, transform_id)
     out1.write(...)
     out1.close()
-
-  Read timer from this channel with the input_timers method::
-
-    for elements_data in data_channel.input_timers(
-        instruction_id, transform_ids):
-      [process elements_timer]
 
   Write timer to this channel using the output_timer_stream method::
 
@@ -222,12 +216,12 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
   @abc.abstractmethod
   def input_elements(self,
                      instruction_id,  # type: str
-                     expected_transforms,  # type: Collection[str]
+                     expected_inputs,  # type: Collection[str]
                      abort_callback=None  # type: Optional[Callable[[], bool]]
                     ):
     # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Data]
 
-    """Returns an iterable of all Element.Data bundles for instruction_id.
+    """Returns an iterable of all Element.Data and Element.Timer bundles for instruction_id.
 
     This iterable terminates only once the full set of data has been recieved
     for each of the expected transforms. It may block waiting for more data.
@@ -237,27 +231,6 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
         expected_transforms: which transforms to wait on for completion
         abort_callback: a callback to invoke if blocking returning whether
             to abort before consuming all the data
-    """
-    raise NotImplementedError(type(self))
-
-  @abc.abstractmethod
-  def input_timers(self,
-      instruction_id,  # type: str
-      expected_timers,  # type: Collection[str]
-      abort_callback=None  # type: Optional[Callable[[], bool]]
-                   ):
-    # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Timer]
-
-    """Returns an iterable of all Element.Timer bundles for instruction_id.
-
-    This iterable terminates only once the full set of timer has been recieved
-    for each of the expected transforms. It may block waiting for more data.
-
-    Args:
-        instruction_id: which instruction the results must belong to
-        expected_transforms: which transforms to wait on for completion
-        abort_callback: a callback to invoke if blocking returning whether
-            to abort before consuming all the timer
     """
     raise NotImplementedError(type(self))
 
@@ -316,8 +289,7 @@ class InMemoryDataChannel(DataChannel):
   """
   def __init__(self, inverse=None, data_buffer_time_limit_ms=0):
     # type: (Optional[InMemoryDataChannel], Optional[int]) -> None
-    self._inputs = []  # type: List[beam_fn_api_pb2.Elements.Data]
-    self._timer_inputs = []  # type: List[beam_fn_api_pb2.Elements.Timer]
+    self._inputs = []  # type: List[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]
     self._data_buffer_time_limit_ms = data_buffer_time_limit_ms
     self._inverse = inverse or InMemoryDataChannel(
         self, data_buffer_time_limit_ms=data_buffer_time_limit_ms)
@@ -327,38 +299,27 @@ class InMemoryDataChannel(DataChannel):
     return self._inverse
 
   def input_elements(self,
-                     instruction_id,  # type: str
-                     unused_expected_transforms=None,  # type: Optional[Collection[str]]
-                     abort_callback=None  # type: Optional[Callable[[], bool]]
-                    ):
-    # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Data]
+      instruction_id,  # type: str
+      unused_expected_inputes=None,   # type: Collection[str]
+      abort_callback=None  # type: Optional[Callable[[], bool]]
+  ):
     other_inputs = []
-    for data in self._inputs:
-      if data.instruction_id == instruction_id:
-        if data.data:
-          yield data
+    for element in self._inputs:
+      if element.instruction_id == instruction_id:
+        if isinstance(element, beam_fn_api_pb2.Elements.Timer):
+          if not element.is_last:
+            yield element
+        if isinstance(element, beam_fn_api_pb2.Elements.Data):
+          if element.data or element.is_last:
+            yield element
       else:
-        other_inputs.append(data)
+        other_inputs.append(element)
     self._inputs = other_inputs
-
-  def input_timers(
-      self,
-      instruction_id,
-      expected_timers=None,
-      abort_callback=None):
-    other_input_timers = []
-    for timer in self._timer_inputs:
-      if timer.instruction_id == instruction_id:
-        if not timer.is_last:
-          yield timer
-      else:
-        other_input_timers.append(timer)
-    self._timer_inputs = other_input_timers
 
   def output_timer_stream(self, instruction_id, transform_id, timer_family_id):
     def add_to_inverse_output(timer):
       if timer:
-        self._inverse._timer_inputs.append(
+        self._inverse._inputs.append(
             beam_fn_api_pb2.Elements.Timer(
                 instruction_id=instruction_id,
                 transform_id=transform_id,
@@ -368,7 +329,7 @@ class InMemoryDataChannel(DataChannel):
 
     def close_stream(timer):
       add_to_inverse_output(timer)
-      self._inverse._timer_inputs.append(
+      self._inverse._inputs.append(
           beam_fn_api_pb2.Elements.Timer(
               instruction_id=instruction_id,
               transform_id=transform_id,
@@ -409,11 +370,7 @@ class _GrpcDataChannel(DataChannel):
     )  # type: queue.Queue[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]
     self._received = collections.defaultdict(
         lambda: queue.Queue(maxsize=5)
-    )  # type: DefaultDict[str, queue.Queue[beam_fn_api_pb2.Elements.Data]]
-
-    self._received_timers = collections.defaultdict(
-        lambda: queue.Queue(maxsize=5))
-    self._receive_timer_lock = threading.Lock()
+    )  # type: DefaultDict[str, queue.Queue[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]]
 
     self._receive_lock = threading.Lock()
     self._reads_finished = threading.Event()
@@ -428,54 +385,21 @@ class _GrpcDataChannel(DataChannel):
     self._reads_finished.wait(timeout)
 
   def _receiving_queue(self, instruction_id):
-    # type: (str) -> queue.Queue[beam_fn_api_pb2.Elements.Data]
+    # type: (str) -> queue.Queue[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]
     with self._receive_lock:
       return self._received[instruction_id]
-
-  def _receiving_timer_queue(self, instruction_id):
-    with self._receive_timer_lock:
-      return self._received_timers[instruction_id]
 
   def _clean_receiving_queue(self, instruction_id):
     # type: (str) -> None
     with self._receive_lock:
       self._received.pop(instruction_id)
 
-  def _clean_timer_receiving_queue(self, instruction_id):
-    with self._receive_timer_lock:
-      self._received_timers.pop(instruction_id)
-
-  def input_timers(
-      self, instruction_id, expected_timers, abort_callback=None):
-    instruction_id = instruction_id
-    received_timer = self._receiving_timer_queue(instruction_id)
-    done_timers = set()
-    abort_callback = abort_callback or (lambda: False)
-    try:
-      while len(done_timers) < len(expected_timers):
-        try:
-          timer = received_timer.get(timeout=1)
-        except queue.Empty:
-          if self._closed:
-            raise RuntimeError('Channel closed prematurely.')
-          if abort_callback():
-            return
-          if self._exc_info:
-            t, v, tb = self._exc_info
-            raise_(t, v, tb)
-        else:
-          if timer.is_last:
-            done_timers.add((timer.transform_id, timer.timer_family_id))
-          else:
-            yield timer
-    finally:
-      self._clean_timer_receiving_queue(instruction_id)
-
   def input_elements(self,
-                     instruction_id,  # type: str
-                     expected_transforms,  # type: Collection[str]
-                     abort_callback=None  # type: Optional[Callable[[], bool]]
-                    ):
+      instruction_id,  # type: str
+      expected_inputs,   # type: Collection[Union[str, Tuple[str, str]]]
+      abort_callback=None  # type: Optional[Callable[[], bool]]
+  ):
+
     # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Data]
 
     """
@@ -484,15 +408,15 @@ class _GrpcDataChannel(DataChannel):
 
     Args:
       instruction_id(str): instruction_id for which data is read
-      expected_transforms(collection): expected transforms
+      expected_inputs(collection): expected inputs, include both data and timer.
     """
     received = self._receiving_queue(instruction_id)
-    done_transforms = set()  # type: Set[str]
+    done_inputs = set()  # type: Set[str]
     abort_callback = abort_callback or (lambda: False)
     try:
-      while len(done_transforms) < len(expected_transforms):
+      while len(done_inputs) < len(expected_inputs):
         try:
-          data = received.get(timeout=1)
+          element = received.get(timeout=1)
         except queue.Empty:
           if self._closed:
             raise RuntimeError('Channel closed prematurely.')
@@ -502,12 +426,18 @@ class _GrpcDataChannel(DataChannel):
             t, v, tb = self._exc_info
             raise_(t, v, tb)
         else:
-          # TODO(BEAM-9558): Cleanup once dataflow is updated.
-          if data.is_last or not data.data:
-            done_transforms.add(data.transform_id)
-          else:
-            assert data.transform_id not in done_transforms
-            yield data
+          if isinstance(element, beam_fn_api_pb2.Elements.Timer):
+            if element.is_last:
+              done_inputs.add((element.transform_id, element.timer_family_id))
+            else:
+              yield element
+          if isinstance(element, beam_fn_api_pb2.Elements.Data):
+            # TODO(BEAM-9558): Cleanup once dataflow is updated.
+            if element.is_last or not element.data:
+              done_inputs.add(element.transform_id)
+            else:
+              assert element.transform_id not in done_inputs
+              yield element
     finally:
       # Instruction_ids are not reusable so Clean queue once we are done with
       #  an instruction_id
@@ -598,7 +528,7 @@ class _GrpcDataChannel(DataChannel):
     try:
       for elements in elements_iterator:
         for timer in elements.timer:
-          self._receiving_timer_queue(timer.instruction_id).put(timer)
+          self._receiving_queue(timer.instruction_id).put(timer)
         for data in elements.data:
           self._receiving_queue(data.instruction_id).put(data)
     except:  # pylint: disable=bare-except
