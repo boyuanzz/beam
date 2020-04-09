@@ -289,7 +289,8 @@ class InMemoryDataChannel(DataChannel):
   """
   def __init__(self, inverse=None, data_buffer_time_limit_ms=0):
     # type: (Optional[InMemoryDataChannel], Optional[int]) -> None
-    self._inputs = []  # type: List[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]
+    self._inputs = [
+    ]  # type: List[Union[beam_fn_api_pb2.Elements.Data, beam_fn_api_pb2.Elements.Timer]]
     self._data_buffer_time_limit_ms = data_buffer_time_limit_ms
     self._inverse = inverse or InMemoryDataChannel(
         self, data_buffer_time_limit_ms=data_buffer_time_limit_ms)
@@ -302,7 +303,7 @@ class InMemoryDataChannel(DataChannel):
       instruction_id,  # type: str
       unused_expected_inputes=None,   # type: Collection[str]
       abort_callback=None  # type: Optional[Callable[[], bool]]
-  ):
+                     ):
     other_inputs = []
     for element in self._inputs:
       if element.instruction_id == instruction_id:
@@ -398,7 +399,7 @@ class _GrpcDataChannel(DataChannel):
       instruction_id,  # type: str
       expected_inputs,   # type: Collection[Union[str, Tuple[str, str]]]
       abort_callback=None  # type: Optional[Callable[[], bool]]
-  ):
+                     ):
 
     # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Data]
 

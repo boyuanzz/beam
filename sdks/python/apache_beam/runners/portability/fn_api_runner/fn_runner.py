@@ -621,8 +621,8 @@ class FnApiRunner(runner.PipelineRunner):
     data_input = {}  # type: Dict[str, PartitionableBuffer]
     data_side_input = {}  # type: DataSideInput
     data_output = {}  # type: DataOutput
-    # A mapping of {transform_id: {timer_family_id: buffer_id}}
-    expected_timer_output = {}  # type: Dict[str, Dict[str, str]]
+    # A mapping of {(transform_id, timer_family_id) : buffer_id}
+    expected_timer_output = {}  # type: Dict[Tuple(str, str), str]
     for transform in bundle_context_manager.stage.transforms:
       if transform.spec.urn in (bundle_processor.DATA_INPUT_URN,
                                 bundle_processor.DATA_OUTPUT_URN):
@@ -661,12 +661,9 @@ class FnApiRunner(runner.PipelineRunner):
         for tag, si in payload.side_inputs.items():
           data_side_input[transform.unique_name, tag] = (
               create_buffer_id(transform.inputs[tag]), si.access_pattern)
-        timer_id_to_buffer_id = {}
         for timer_family_id in payload.timer_family_specs.keys():
-          timer_id_to_buffer_id[timer_family_id] = create_buffer_id(
-              timer_family_id, 'timers')
-        if timer_id_to_buffer_id:
-          expected_timer_output[transform.unique_name] = timer_id_to_buffer_id
+          expected_timer_output[(transform.unique_name, timer_family_id)] = (
+              create_buffer_id(timer_family_id, 'timers'))
     return data_input, data_side_input, data_output, expected_timer_output
 
   @staticmethod
@@ -940,10 +937,9 @@ class BundleManager(object):
       # Close the stream if there is no timers to be sent.
       if not fired_timers:
         if expected_output_timers:
-          for transform_id, timer_ids in expected_output_timers.items():
-            id_to_timers = {i: [] for i in timer_ids.keys()}
+          for transform_id, timer_family_id in expected_output_timers.keys():
             self._send_timers_to_worker(
-                process_bundle_id, transform_id, id_to_timers)
+                process_bundle_id, transform_id, {timer_family_id: []})
       # If there is no split_manager, write all input data to the channel.
       for transform_id, elements in inputs.items():
         self._send_input_to_worker(process_bundle_id, transform_id, elements)
@@ -965,24 +961,20 @@ class BundleManager(object):
         split_results = self._generate_splits_for_testing(
             split_manager, inputs, process_bundle_id)
 
-      expected_timers = []
-      for transform_id, timer_ids in expected_output_timers.items():
-        for timer_id in timer_ids:
-          expected_timers.append((transform_id, timer_id))
-      expect_inputs = list(expected_outputs.keys())
-      expect_inputs.extend(expected_timers)
+      expect_reads = list(expected_outputs.keys())
+      expect_reads.extend(list(expected_output_timers.keys()))
 
       # Gather all output data.
       for output in self._worker_handler.data_conn.input_elements(
           process_bundle_id,
-          expect_inputs,
+          expect_reads,
           abort_callback=lambda:
           (result_future.is_done() and result_future.get().error)):
         if isinstance(output, beam_fn_api_pb2.Elements.Timer):
           with BundleManager._lock:
             self._get_buffer(
-                expected_output_timers[output.transform_id][
-                  output.timer_family_id],
+                expected_output_timers[(
+                    output.transform_id, output.timer_family_id)],
                 output.transform_id).append(output.timers)
         if isinstance(output, beam_fn_api_pb2.Elements.Data):
           with BundleManager._lock:
@@ -1032,7 +1024,7 @@ class ParallelBundleManager(BundleManager):
                      inputs,  # type: Mapping[str, PartitionableBuffer]
                      expected_outputs,  # type: DataOutput
                      fired_timers={},  # type: Mapping[str, Mapping[str, PartitionableBuffer]]
-                     expected_output_timers={}  # type: Dict[str, Dict[str, str]]
+                     expected_output_timers={}  # type: Dict[Tuple[str, str], str]
                      ):
     # type: (...) -> BundleProcessResult
     part_inputs = [{} for _ in range(self._num_workers)

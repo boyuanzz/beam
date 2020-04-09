@@ -562,10 +562,10 @@ class OutputTimer(object):
   def __init__(self,
                key,
                window,  # type: windowed_value.BoundedWindow
-               paneinfo,
-               timer_family_id,
-               timer_coder_impl,
-               output_stream
+               paneinfo,  # type: windowed_value.PaneInfo
+               timer_family_id,  # type: str
+               timer_coder_impl,  # type: coder_impl.TimerCoderImpl
+               output_stream  # type: data_plane.ClosableOutputStream
               ):
     self._key = key
     self._window = window
@@ -611,7 +611,6 @@ class FnApiUserStateContext(userstate.UserStateContext):
                transform_id,  # type: str
                key_coder,  # type: coders.Coder
                window_coder,  # type: coders.Coder
-               timer_coders
               ):
     # type: (...) -> None
 
@@ -630,13 +629,14 @@ class FnApiUserStateContext(userstate.UserStateContext):
     self._key_coder = key_coder
     self._window_coder = window_coder
     # A mapping of {timer_family_id: OutputStream}
-    self._timer_output_streams = None
-    self._timer_coders = timer_coders
+    self._timer_output_streams = {}
+    self._timer_coders_impl = {}
     self._all_states = {
     }  # type: Dict[tuple, userstate.AccumulatingRuntimeState]
 
-  def update_timer_output_streams(self, output_streams):
-    self._timer_output_streams = output_streams
+  def add_timer_info(self, timer_family_id, output_stream, coder_impl):
+    self._timer_output_streams[timer_family_id] = output_stream
+    self._timer_coders_impl[timer_family_id] = coder_impl
 
   def get_timer(
       self,
@@ -646,7 +646,7 @@ class FnApiUserStateContext(userstate.UserStateContext):
       pane):
     # type: (...) -> OutputTimer
     output_stream = self._timer_output_streams[timer_spec.name]
-    timer_coder_impl = self._timer_coders[timer_spec.name].get_impl()
+    timer_coder_impl = self._timer_coders_impl[timer_spec.name]
     assert output_stream is not None
     return OutputTimer(
         key, window, pane, timer_spec.name, timer_coder_impl, output_stream)
@@ -702,6 +702,8 @@ class FnApiUserStateContext(userstate.UserStateContext):
     # type: () -> None
     # TODO(BEAM-5428): Implement cross-bundle state caching.
     self._all_states = {}
+    self._timer_output_streams = {}
+    self._timer_coders_impl = {}
 
 
 def memoize(func):
@@ -745,15 +747,21 @@ class BundleProcessor(object):
     self.state_handler = state_handler
     self.data_channel_factory = data_channel_factory
 
+    # There is no guarantee that the runner only set
+    # timer_api_service_descriptor when having timers. So this field cannot be
+    # used as an indicator of timers.
     if self.process_bundle_descriptor.timer_api_service_descriptor:
-      self.timer_data_channel = data_channel_factory.create_data_channel_from_url(
-          self.process_bundle_descriptor.timer_api_service_descriptor.url)
+      self.timer_data_channel = (
+          data_channel_factory.create_data_channel_from_url(
+              self.process_bundle_descriptor.timer_api_service_descriptor.url))
     else:
       self.timer_data_channel = None
-    # A mapping of {transform_id: DoOperation} for DoFn which has timers.
-    self.process_timer_ops = {}
-    self.timer_coder = {}
-    self.timer_ids = {}
+
+    # A mapping of
+    # {(transform_id, timer_family_id):
+    # {"timer_coder_impl": coder, "output_stream": stream}}
+    # The mapping keeps empty when there is no timer_family_specs in the ProcessBundle
+    self.timers_info = {}
 
     # TODO(robertwb): Figure out the correct prefix to use for output counters
     # from StateSampler.
@@ -778,8 +786,7 @@ class BundleProcessor(object):
         self.state_sampler,
         self.state_handler)
 
-    self.timer_coder = transform_factory.get_timer_coders()
-    self.timer_ids = transform_factory.get_timer_ids()
+    self.timers_info = transform_factory.extract_timers_info()
 
     def is_side_input(transform_proto, tag):
       if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
@@ -815,20 +822,10 @@ class BundleProcessor(object):
           for consumer in pcoll_consumers[pcoll]
       ])
 
-    ops = collections.OrderedDict([
+    return collections.OrderedDict([
         (transform_id, get_operation(transform_id)) for transform_id in sorted(
             descriptor.transforms, key=topological_height, reverse=True)
     ])
-
-    # Collect all DoOperations which have timers.
-    for transform_id, transform_proto in descriptor.transforms.items():
-      if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
-        pardo_payload = proto_utils.parse_Bytes(
-            transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
-        if pardo_payload.timer_family_specs:
-          self.process_timer_ops[transform_id] = ops[transform_id]
-
-    return ops
 
   def reset(self):
     # type: () -> None
@@ -840,6 +837,7 @@ class BundleProcessor(object):
 
   def process_bundle(self, instruction_id):
     # type: (str) -> Tuple[List[beam_fn_api_pb2.DelayedBundleApplication], bool]
+
     expected_inputs = []
 
     for op in self.ops.values():
@@ -861,10 +859,15 @@ class BundleProcessor(object):
         op.execution_context = execution_context
         op.start()
 
-      # Inject data inputs from data plane.
+      # Each data_channel is mapped to a list of expected inputs which includes
+      # both data input and timer input. The data input is identied by
+      # transform_id. The data input is identified by
+      # (transform_id, timer_family_id).
       data_channels = collections.defaultdict(
           list
       )  # type: DefaultDict[data_plane.GrpcClientDataChannel, List[str]]
+
+      # Inject data inputs from data plane.
       input_op_by_transform_id = {}
       for input_op in expected_inputs:
         data_channels[input_op.data_channel].append(input_op.transform_id)
@@ -872,47 +875,41 @@ class BundleProcessor(object):
 
       # Inject timer inputs from data_plane
       if self.timer_data_channel:
-        expected_timers = []
-        for transform_id, timer_ids in self.timer_ids.items():
-          for timer_id in timer_ids:
-            expected_timers.append((transform_id, timer_id))
-        data_channels[self.timer_data_channel].extend(expected_timers)
+        data_channels[self.timer_data_channel].extend(
+            list(self.timers_info.keys()))
 
-      # Set up timer output stream
-      timer_output_streams = {}
-      for transform_id, timer_list in self.timer_ids.items():
-        output_streams = {}
-        for timer_id in timer_list:
-          output_streams[
-              timer_id] = self.timer_data_channel.output_timer_stream(
-                  instruction_id, transform_id, timer_id)
-          timer_output_streams[transform_id] = output_streams
-        self.process_timer_ops[
-            transform_id].user_state_context.update_timer_output_streams(
-                output_streams)
+      # Set up timer output stream for DoOperation.
+      for ((transform_id, timer_family_id),
+           info_map) in self.timers_info.items():
+        output_stream = self.timer_data_channel.output_timer_stream(
+            instruction_id, transform_id, timer_family_id)
+        info_map['output_stream'] = output_stream
+        self.ops[transform_id].user_state_context.add_timer_info(
+            timer_family_id, output_stream, info_map['timer_coder_impl'])
 
       # Process data and timer inputs
       for data_channel, expected_inputs in data_channels.items():
         for element in data_channel.input_elements(instruction_id,
                                                    expected_inputs):
           if isinstance(element, beam_fn_api_pb2.Elements.Timer):
-            timer_coder = self.timer_coder[element.transform_id][
-              element.timer_family_id]
-            for timer_data in timer_coder.get_impl().decode_all(element.timers):
-              self.process_timer_ops[element.transform_id].process_timer(
+            timer_coder_impl = (
+                self.timers_info[(element.transform_id,
+                                  timer_family_id)]['timer_coder_impl'])
+            for timer_data in timer_coder_impl.decode_all(element.timers):
+              self.ops[element.transform_id].process_timer(
                   element.timer_family_id, timer_data)
           if isinstance(element, beam_fn_api_pb2.Elements.Data):
-            input_op_by_transform_id[element.transform_id].process_encoded(element.data)
+            input_op_by_transform_id[element.transform_id].process_encoded(
+                element.data)
 
       # Finish all operations.
       for op in self.ops.values():
         _LOGGER.debug('finish %s', op)
         op.finish()
 
-      # Close timer stream per timer_family_id per transform_id.
-      for output_streams in timer_output_streams.values():
-        for stream in output_streams.values():
-          stream.close()
+      # Close every timer output stream
+      for info_map in self.timers_info.values():
+        info_map['output_stream'].close()
 
       return ([
           self.delayed_bundle_application(op, residual) for op,
@@ -1146,29 +1143,20 @@ class BeamTransformFactory(object):
         transform_proto.spec.payload, parameter_type)
     return creator(self, transform_id, transform_proto, payload, consumers)
 
-  def get_timer_coders(self):
-    timer_coder = {}
+  def extract_timers_info(self):
+    timers_info = {}
     for transform_id, transform_proto in self.descriptor.transforms.items():
       if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
         pardo_payload = proto_utils.parse_Bytes(
             transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
-        coder = {}
-        for id, timer_family_spec in pardo_payload.timer_family_specs.items():
-          coder[id] = self.get_coder(timer_family_spec.timer_family_coder_id)
-        if coder:
-          timer_coder[transform_id] = coder
-    return timer_coder
-
-  def get_timer_ids(self):
-    timer_ids = {}
-    for transform_id, transform_proto in self.descriptor.transforms.items():
-      if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
-        pardo_payload = proto_utils.parse_Bytes(
-            transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
-        if pardo_payload.timer_family_specs:
-          timer_ids[transform_id] = list(
-              pardo_payload.timer_family_specs.keys())
-    return timer_ids
+        for (timer_family_id,
+             timer_family_spec) in pardo_payload.timer_family_specs.items():
+          timer_coder_impl = self.get_coder(
+              timer_family_spec.timer_family_coder_id).get_impl()
+          timers_info[(transform_id, timer_family_id)] = ({
+              'timer_coder_impl': timer_coder_impl
+          })
+    return timers_info
 
   def get_coder(self, coder_id):
     # type: (str) -> coders.Coder
@@ -1539,9 +1527,8 @@ def _create_pardo_operation(
           factory.state_handler,
           transform_id,
           main_input_coder.key_coder(),
-          main_input_coder.window_coder,
-          factory.get_timer_coders().get(
-              transform_id, None))  # type: Optional[FnApiUserStateContext]
+          main_input_coder.window_coder
+      )  # type: Optional[FnApiUserStateContext]
     else:
       user_state_context = None
   else:
