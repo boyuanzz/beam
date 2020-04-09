@@ -562,6 +562,7 @@ class OutputTimer(object):
   def __init__(self,
                key,
                window,  # type: windowed_value.BoundedWindow
+               timestamp,  # type: timestamp.Timestamp
                paneinfo,  # type: windowed_value.PaneInfo
                timer_family_id,  # type: str
                timer_coder_impl,  # type: coder_impl.TimerCoderImpl
@@ -569,6 +570,7 @@ class OutputTimer(object):
               ):
     self._key = key
     self._window = window
+    self._input_timestamp = timestamp
     self._paneinfo = paneinfo
     self._timer_family_id = timer_family_id
     self._output_stream = output_stream
@@ -582,7 +584,7 @@ class OutputTimer(object):
         windows=(self._window, ),
         clear_bit=False,
         fire_timestamp=ts,
-        hold_timestamp=ts,
+        hold_timestamp=self._input_timestamp,
         paneinfo=self._paneinfo)
     self._timer_coder_impl.encode_to_stream(timer, self._output_stream, True)
     self._output_stream.maybe_flush()
@@ -643,13 +645,20 @@ class FnApiUserStateContext(userstate.UserStateContext):
       timer_spec,
       key,
       window,  # type: windowed_value.BoundedWindow
+      timestamp,
       pane):
     # type: (...) -> OutputTimer
     output_stream = self._timer_output_streams[timer_spec.name]
     timer_coder_impl = self._timer_coders_impl[timer_spec.name]
     assert output_stream is not None
     return OutputTimer(
-        key, window, pane, timer_spec.name, timer_coder_impl, output_stream)
+        key,
+        window,
+        timestamp,
+        pane,
+        timer_spec.name,
+        timer_coder_impl,
+        output_stream)
 
   def get_state(self, *args):
     state_handle = self._all_states.get(args)

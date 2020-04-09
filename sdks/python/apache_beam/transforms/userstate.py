@@ -348,7 +348,7 @@ class CombiningValueRuntimeState(AccumulatingRuntimeState):
 
 class UserStateContext(object):
   """Wrapper allowing user state and timers to be accessed by a DoFnInvoker."""
-  def get_timer(self, timer_spec, key, window):
+  def get_timer(self, timer_spec, key, window, timestamp, pane):
     raise NotImplementedError(type(self))
 
   def get_state(self, state_spec, key, window):
