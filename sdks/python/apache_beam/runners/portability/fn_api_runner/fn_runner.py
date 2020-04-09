@@ -386,6 +386,8 @@ class FnApiRunner(runner.PipelineRunner):
       bundle_context_manager,  # type: execution.BundleContextManager
       data_input,
       data_output,  # type: DataOutput
+      fired_timers,
+      expected_output_timers,
       cache_token_generator
   ):
     # type: (...) -> None
@@ -408,8 +410,8 @@ class FnApiRunner(runner.PipelineRunner):
             k,
             num_workers=self._num_workers,
             cache_token_generator=cache_token_generator)
-        # Ignore timer inputs/outputs here.
-        testing_bundle_manager.process_bundle(data_input, data_output, {}, {})
+        testing_bundle_manager.process_bundle(
+            data_input, data_output, fired_timers, expected_output_timers)
       finally:
         runner_execution_context.state_servicer.restore()
 
@@ -529,6 +531,8 @@ class FnApiRunner(runner.PipelineRunner):
         bundle_context_manager,
         data_input,
         data_output,
+        {},
+        expected_timer_output,
         cache_token_generator=cache_token_generator)
 
     bundle_manager = ParallelBundleManager(
