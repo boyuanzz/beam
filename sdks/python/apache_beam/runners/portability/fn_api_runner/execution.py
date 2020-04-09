@@ -317,7 +317,7 @@ class BundleContextManager(object):
     # Properties that are lazily initialized
     self._process_bundle_descriptor = None
     self._worker_handlers = None
-    # a mapping of {transform_id : {timer_family_id: timer_coder_id}}. The map
+    # a mapping of {(transform_id, timer_family_id): timer_coder_id}. The map
     # is built after self._process_bundle_descriptor is initialized.
     # This field can be used to tell whether current bundle has timers.
     self._timer_coder_ids = None
@@ -382,11 +382,9 @@ class BundleContextManager(object):
       if transform_proto.spec.urn == common_urns.primitives.PAR_DO.urn:
         pardo_payload = proto_utils.parse_Bytes(
             transform_proto.spec.payload, beam_runner_api_pb2.ParDoPayload)
-        coder_ids = {}
         for id, timer_family_spec in pardo_payload.timer_family_specs.items():
-          coder_ids[id] = timer_family_spec.timer_family_coder_id
-        if coder_ids:
-          timer_coder_ids[transform_id] = coder_ids
+          timer_coder_ids[(transform_id, id)] = (
+              timer_family_spec.timer_family_coder_id)
     return timer_coder_ids
 
   def get_coder_impl(self, coder_id):
@@ -397,11 +395,9 @@ class BundleContextManager(object):
       return self.execution_context.pipeline_context.coders[coder_id].get_impl()
 
   def get_timer_coder_impl(self, transform_id, timer_family_id):
-    assert (
-        transform_id in self._timer_coder_ids and
-        timer_family_id in self._timer_coder_ids[transform_id])
+    assert (transform_id, timer_family_id) in self._timer_coder_ids
     return self.get_coder_impl(
-        self._timer_coder_ids[transform_id][timer_family_id])
+        self._timer_coder_ids[(transform_id, timer_family_id)])
 
   def get_buffer(self, buffer_id, transform_id):
     # type: (bytes, str) -> PartitionableBuffer

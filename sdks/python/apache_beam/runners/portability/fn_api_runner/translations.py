@@ -91,8 +91,7 @@ class Stage(object):
     self.transforms = transforms
     self.downstream_side_inputs = downstream_side_inputs
     self.must_follow = must_follow
-    self.timer_pcollections = []  # type: List[Tuple[str, str]]
-    self.timers = {}  # type: Dict[str, List[str]]
+    self.timers = set()  # type: Set[Tuple[str, str]]
     self.parent = parent
     if environment is None:
       environment = functools.reduce(
@@ -1332,9 +1331,8 @@ def setup_timer_mapping(stages, pipeline_context):
       if transform.spec.urn in PAR_DO_URNS:
         payload = proto_utils.parse_Bytes(
             transform.spec.payload, beam_runner_api_pb2.ParDoPayload)
-        timer_ids = payload.timer_family_specs.keys()
-        if timer_ids:
-          stage.timers[transform.unique_name] = timer_ids
+        for timer_family_id in payload.timer_family_specs.keys():
+          stage.timers.add((transform.unique_name, timer_family_id))
     yield stage
 
 

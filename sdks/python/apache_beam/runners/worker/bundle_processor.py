@@ -894,8 +894,9 @@ class BundleProcessor(object):
                                                    expected_inputs):
           if isinstance(element, beam_fn_api_pb2.Elements.Timer):
             timer_coder_impl = (
-                self.timers_info[(element.transform_id,
-                                  element.timer_family_id)]['timer_coder_impl'])
+                self.timers_info[(
+                    element.transform_id,
+                    element.timer_family_id)]['timer_coder_impl'])
             for timer_data in timer_coder_impl.decode_all(element.timers):
               self.ops[element.transform_id].process_timer(
                   element.timer_family_id, timer_data)

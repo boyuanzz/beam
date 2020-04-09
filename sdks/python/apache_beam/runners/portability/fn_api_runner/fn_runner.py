@@ -417,32 +417,28 @@ class FnApiRunner(runner.PipelineRunner):
   def _collect_written_timers_and_add_to_fired_timers(
       self,
       bundle_context_manager,  # type: execution.BundleContextManager
-      fired_timers
+      fired_timers  # type: Dict[Tuple[str, str], ListBuffer]
   ):
     # type: (...) -> None
 
-    for (transform_id,
-         timer_ids) in bundle_context_manager.stage.timers.items():
-      timers = {}
-      for timer_id in timer_ids:
-        written_timers = bundle_context_manager.get_buffer(
-            create_buffer_id(timer_id, kind='timers'), transform_id)
-        timer_coder_impl = bundle_context_manager.get_timer_coder_impl(
-            transform_id, timer_id)
-        if not written_timers.cleared:
-          timers_by_key_and_window = {}
-          for elements_timers in written_timers:
-            for decoded_timer in timer_coder_impl.decode_all(elements_timers):
-              timers_by_key_and_window[decoded_timer.user_key,
-                                       decoded_timer.windows[0]] = decoded_timer
-          out = create_OutputStream()
-          for decoded_timer in timers_by_key_and_window.values():
-            timer_coder_impl.encode_to_stream(decoded_timer, out, True)
-          timers[timer_id] = ListBuffer(coder_impl=timer_coder_impl)
-          timers[timer_id].append(out.get())
-          written_timers.clear()
-      if timers:
-        fired_timers[transform_id] = timers
+    for (transform_id, timer_family_id) in bundle_context_manager.stage.timers:
+      written_timers = bundle_context_manager.get_buffer(
+          create_buffer_id(timer_family_id, kind='timers'), transform_id)
+      timer_coder_impl = bundle_context_manager.get_timer_coder_impl(
+          transform_id, timer_family_id)
+      if not written_timers.cleared:
+        timers_by_key_and_window = {}
+        for elements_timers in written_timers:
+          for decoded_timer in timer_coder_impl.decode_all(elements_timers):
+            timers_by_key_and_window[decoded_timer.user_key,
+                                     decoded_timer.windows[0]] = decoded_timer
+        out = create_OutputStream()
+        for decoded_timer in timers_by_key_and_window.values():
+          timer_coder_impl.encode_to_stream(decoded_timer, out, True)
+        fired_timers[(transform_id, timer_family_id)] = ListBuffer(
+            coder_impl=timer_coder_impl)
+        fired_timers[(transform_id, timer_family_id)].append(out.get())
+        written_timers.clear()
 
   def _add_residuals_and_channel_splits_to_deferred_inputs(
       self,
@@ -529,8 +525,7 @@ class FnApiRunner(runner.PipelineRunner):
         runner_execution_context,
         bundle_context_manager,
         data_input,
-        data_output,
-        {},
+        data_output, {},
         expected_timer_output,
         cache_token_generator=cache_token_generator)
 
@@ -809,15 +804,13 @@ class BundleManager(object):
     data_out.close()
 
   def _send_timers_to_worker(
-      self, process_bundle_id, transform_id, timer_streams):
+      self, process_bundle_id, transform_id, timer_family_id, timers):
     assert self._worker_handler is not None
-    timer_out = None
-    for timer_family_id, timers in timer_streams.items():
-      timer_out = self._worker_handler.data_conn.output_timer_stream(
-          process_bundle_id, transform_id, timer_family_id)
-      for timer in timers:
-        timer_out.write(timer)
-      timer_out.close()
+    timer_out = self._worker_handler.data_conn.output_timer_stream(
+        process_bundle_id, transform_id, timer_family_id)
+    for timer in timers:
+      timer_out.write(timer)
+    timer_out.close()
 
   def _register_bundle_descriptor(self):
     # type: () -> Optional[ControlFuture]
@@ -934,15 +927,15 @@ class BundleManager(object):
     split_manager = self._select_split_manager()
     if not split_manager:
       # Send the fired timers if any.
-      for transform_id, id_to_timers in fired_timers.items():
+      for (transform_id, timer_family_id), timers in fired_timers.items():
         self._send_timers_to_worker(
-            process_bundle_id, transform_id, id_to_timers)
-      # Close the stream if there is no timers to be sent.
-      if not fired_timers:
-        if expected_output_timers:
-          for transform_id, timer_family_id in expected_output_timers.keys():
-            self._send_timers_to_worker(
-                process_bundle_id, transform_id, {timer_family_id: []})
+            process_bundle_id, transform_id, timer_family_id, timers)
+
+      for transform_id, timer_family_id in (set(expected_output_timers.keys())):
+        # Close the stream if there is no timers to be sent.
+        self._send_timers_to_worker(
+            process_bundle_id, transform_id, timer_family_id, [])
+
       # If there is no split_manager, write all input data to the channel.
       for transform_id, elements in inputs.items():
         self._send_input_to_worker(process_bundle_id, transform_id, elements)
