@@ -129,7 +129,7 @@ class CombiningValueStateSpec(StateSpec):
             combine_fn=self.combine_fn.to_runner_api(context),
             accumulator_coder_id=context.coders.get_id(self.coder)))
 
-
+# TODO(BEAM-9562): Update Timer to have of() and clear() APIs.
 Timer = namedtuple(
     'Timer',
     'user_key '

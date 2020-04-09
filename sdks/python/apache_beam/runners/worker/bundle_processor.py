@@ -591,16 +591,14 @@ class OutputTimer(object):
 
   def clear(self):
     # type: () -> None
-    dummy_millis = int(common_urns.constants.MAX_TIMESTAMP_MILLIS.constant) + 1
-    clear_ts = timestamp.Timestamp(micros=dummy_millis * 1000)
     timer = userstate.Timer(
         user_key=self._key,
         dynamic_timer_tag='',
         windows=(self._window, ),
-        clear_bit=False,
-        fire_timestamp=clear_ts,
-        hold_timestamp=clear_ts,
-        paneinfo=self._paneinfo)
+        clear_bit=True,
+        fire_timestamp=None,
+        hold_timestamp=None,
+        paneinfo=None)
     self._timer_coder_impl.encode_to_stream(timer, self._output_stream, True)
     self._output_stream.maybe_flush()
 
