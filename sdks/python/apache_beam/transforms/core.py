@@ -31,10 +31,10 @@ from builtins import map
 from builtins import object
 from builtins import range
 
+from google.protobuf import message
 from past.builtins import unicode
 
 from apache_beam import coders
-from apache_beam.coders import coders as c
 from apache_beam import pvalue
 from apache_beam import typehints
 from apache_beam.coders import typecoders
@@ -72,11 +72,9 @@ from apache_beam.typehints.typehints import is_consistent_with
 from apache_beam.utils import proto_utils
 from apache_beam.utils import urns
 from apache_beam.utils.timestamp import Duration
-from google.protobuf import message
 
 if typing.TYPE_CHECKING:
-  from google.protobuf import message  # pylint: disable=ungrouped-imports
-  from apache_beam.io import iobase
+  from apache_beam.io import iobase  # pylint: disable=ungrouped-imports
   from apache_beam.pipeline import Pipeline
   from apache_beam.runners.pipeline_context import PipelineContext
   from apache_beam.transforms import create_source
@@ -1348,9 +1346,6 @@ class ParDo(PTransformWithSideInputs):
   def to_runner_api(self, context, **extra_kwargs):
     # type: (PipelineContext, bool) -> beam_runner_api_pb2.FunctionSpec
     has_parts = extra_kwargs.get('has_part', False)
-
-    from apache_beam.portability.api import beam_runner_api_pb2
-
     urn, typed_param = self.to_runner_api_parameter(context, **extra_kwargs)
     if urn == python_urns.GENERIC_COMPOSITE_TRANSFORM and not has_parts:
       # TODO(BEAM-3812): Remove this fallback.

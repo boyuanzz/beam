@@ -74,7 +74,6 @@ from apache_beam.transforms import userstate
 from apache_beam.utils import counters
 from apache_beam.utils import proto_utils
 from apache_beam.utils import timestamp
-from apache_beam.utils import windowed_value
 
 if TYPE_CHECKING:
   from google.protobuf import message  # pylint: disable=ungrouped-imports
@@ -85,6 +84,7 @@ if TYPE_CHECKING:
   from apache_beam.runners.worker import data_plane
   from apache_beam.runners.worker import sdk_worker
   from apache_beam.transforms import window
+  from apache_beam.utils import windowed_value
 
 # This module is experimental. No backwards-compatibility guarantees.
 T = TypeVar('T')
@@ -760,7 +760,8 @@ class BundleProcessor(object):
     # A mapping of
     # {(transform_id, timer_family_id):
     # {"timer_coder_impl": coder, "output_stream": stream}}
-    # The mapping keeps empty when there is no timer_family_specs in the ProcessBundle
+    # The mapping keeps empty when there is no timer_family_specs in the
+    # ProcessBundleDescriptor.
     self.timers_info = {}
 
     # TODO(robertwb): Figure out the correct prefix to use for output counters
@@ -894,7 +895,7 @@ class BundleProcessor(object):
           if isinstance(element, beam_fn_api_pb2.Elements.Timer):
             timer_coder_impl = (
                 self.timers_info[(element.transform_id,
-                                  timer_family_id)]['timer_coder_impl'])
+                                  element.timer_family_id)]['timer_coder_impl'])
             for timer_data in timer_coder_impl.decode_all(element.timers):
               self.ops[element.transform_id].process_timer(
                   element.timer_family_id, timer_data)

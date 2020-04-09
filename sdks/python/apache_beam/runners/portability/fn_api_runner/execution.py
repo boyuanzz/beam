@@ -40,8 +40,8 @@ from apache_beam.runners.worker import bundle_processor
 from apache_beam.transforms import trigger
 from apache_beam.transforms.window import GlobalWindow
 from apache_beam.transforms.window import GlobalWindows
-from apache_beam.utils import windowed_value
 from apache_beam.utils import proto_utils
+from apache_beam.utils import windowed_value
 
 if TYPE_CHECKING:
   from apache_beam.coders.coder_impl import CoderImpl

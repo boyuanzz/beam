@@ -221,7 +221,8 @@ class DataChannel(with_metaclass(abc.ABCMeta, object)):  # type: ignore[misc]
                     ):
     # type: (...) -> Iterator[beam_fn_api_pb2.Elements.Data]
 
-    """Returns an iterable of all Element.Data and Element.Timer bundles for instruction_id.
+    """Returns an iterable of all Element.Data and Element.Timer bundles for
+    instruction_id.
 
     This iterable terminates only once the full set of data has been recieved
     for each of the expected transforms. It may block waiting for more data.

@@ -44,7 +44,6 @@ from typing import Tuple
 from typing import TypeVar
 
 import apache_beam as beam  # pylint: disable=ungrouped-imports
-from apache_beam.coders.coder_impl import create_InputStream
 from apache_beam.coders.coder_impl import create_OutputStream
 from apache_beam.metrics import metric
 from apache_beam.metrics import monitoring_infos
@@ -915,8 +914,8 @@ class BundleManager(object):
   def process_bundle(self,
                      inputs,  # type: Mapping[str, PartitionableBuffer]
                      expected_outputs,  # type: DataOutput
-                     fired_timers={},  # type: Mapping[str, Mapping[str, PartitionableBuffer]]
-                     expected_output_timers={}  # type: Dict[str, Dict[str, str]]
+                     fired_timers,  # type: Mapping[str, Mapping[str, PartitionableBuffer]]
+                     expected_output_timers  # type: Dict[str, Dict[str, str]]
                     ):
     # type: (...) -> BundleProcessResult
     # Unique id for the instruction processing this bundle.
@@ -1027,8 +1026,8 @@ class ParallelBundleManager(BundleManager):
   def process_bundle(self,
                      inputs,  # type: Mapping[str, PartitionableBuffer]
                      expected_outputs,  # type: DataOutput
-                     fired_timers={},  # type: Mapping[str, Mapping[str, PartitionableBuffer]]
-                     expected_output_timers={}  # type: Dict[Tuple[str, str], str]
+                     fired_timers,  # type: Mapping[str, Mapping[str, PartitionableBuffer]]
+                     expected_output_timers  # type: Dict[Tuple[str, str], str]
                      ):
     # type: (...) -> BundleProcessResult
     part_inputs = [{} for _ in range(self._num_workers)
