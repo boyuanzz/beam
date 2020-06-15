@@ -99,6 +99,20 @@ public abstract class RestrictionTracker<RestrictionT, PositionT> {
    */
   public abstract void checkDone() throws IllegalStateException;
 
+  public enum IsBounded {
+    /** Indicates that a {@code Restriction} represents a bounded amount of work. */
+    BOUNDED,
+    /** Indicates that a {@code Restriction} represents an unbounded amount of work. */
+    UNBOUNDED
+  }
+
+  /**
+   * Return the boundedness of the current restriction. If the current restriction represents a
+   * finite amount of work, it should return {@link IsBounded#BOUNDED}. Otherwise, it should return
+   * {@link IsBounded#UNBOUNDED}.
+   */
+  public abstract IsBounded isBounded();
+
   /**
    * All {@link RestrictionTracker}s SHOULD implement this interface to improve auto-scaling and
    * splitting performance.
@@ -160,5 +174,17 @@ public abstract class RestrictionTracker<RestrictionT, PositionT> {
 
     /** The known amount of work remaining. */
     public abstract double getWorkRemaining();
+  }
+
+  /** A representation of the truncate result. */
+  @AutoValue
+  public abstract static class TruncateResult<RestrictionT> {
+    /** Returns a {@link TruncateResult} for the given restriction. */
+    public static <RestrictionT> TruncateResult of(RestrictionT restriction) {
+      return new AutoValue_RestrictionTracker_TruncateResult(restriction);
+    }
+
+    @Nullable
+    public abstract RestrictionT getTruncatedRestriction();
   }
 }
