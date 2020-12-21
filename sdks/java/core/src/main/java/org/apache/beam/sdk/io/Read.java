@@ -17,6 +17,7 @@
  */
 package org.apache.beam.sdk.io;
 
+import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions.checkState;
 
 import com.google.auto.value.AutoValue;
@@ -27,6 +28,7 @@ import java.io.Serializable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.TimeUnit;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.InstantCoder;
@@ -60,6 +62,9 @@ import org.apache.beam.sdk.values.TypeDescriptor;
 import org.apache.beam.sdk.values.ValueWithRecordId;
 import org.apache.beam.sdk.values.ValueWithRecordId.StripIdsDoFn;
 import org.apache.beam.sdk.values.ValueWithRecordId.ValueWithRecordIdCoder;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.Cache;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.CacheBuilder;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.RemovalListener;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -439,9 +444,24 @@ public class Read {
     private static final Logger LOG = LoggerFactory.getLogger(UnboundedSourceAsSDFWrapperFn.class);
     private static final int DEFAULT_BUNDLE_FINALIZATION_LIMIT_MINS = 10;
     private final Coder<CheckpointT> checkpointCoder;
+    private Cache<UnboundedSourceRestriction, UnboundedReader> cachedReaders;
 
     private UnboundedSourceAsSDFWrapperFn(Coder<CheckpointT> checkpointCoder) {
       this.checkpointCoder = checkpointCoder;
+      cachedReaders =
+          CacheBuilder.newBuilder()
+              .expireAfterWrite(5, TimeUnit.MINUTES)
+              .maximumSize(100)
+              .removalListener(
+                  (RemovalListener<UnboundedSourceRestriction, UnboundedReader>)
+                      removalNotification -> {
+                        try {
+                          removalNotification.getValue().close();
+                        } catch (IOException e) {
+                          LOG.warn("Failed to close UnboundedReader.", e);
+                        }
+                      })
+              .build();
     }
 
     @GetInitialRestriction
@@ -488,7 +508,21 @@ public class Read {
         restrictionTracker(
             @Restriction UnboundedSourceRestriction<OutputT, CheckpointT> restriction,
             PipelineOptions pipelineOptions) {
-      return new UnboundedSourceAsSDFRestrictionTracker(restriction, pipelineOptions);
+      try {
+        // For caching reader, we don't care about the watermark.
+        UnboundedReader reader =
+            cachedReaders.getIfPresent(
+                UnboundedSourceRestriction.create(
+                    restriction.getSource(), restriction.getCheckpoint(), null));
+        if (reader == null) {
+          reader =
+              restriction.getSource().createReader(pipelineOptions, restriction.getCheckpoint());
+          cachedReaders.put(restriction, reader);
+        }
+        return new UnboundedSourceAsSDFRestrictionTracker(restriction, pipelineOptions, reader);
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
     }
 
     @ProcessElement
@@ -501,6 +535,11 @@ public class Read {
         throws IOException {
       UnboundedSourceRestriction<OutputT, CheckpointT> initialRestriction =
           tracker.currentRestriction();
+      UnboundedReader currentReader =
+          cachedReaders.getIfPresent(
+              UnboundedSourceRestriction.create(
+                  initialRestriction.getSource(), initialRestriction.getCheckpoint(), null));
+      checkNotNull(currentReader);
 
       UnboundedSourceValue<OutputT>[] out = new UnboundedSourceValue[1];
       while (tracker.tryClaim(out) && out[0] != null) {
@@ -526,6 +565,12 @@ public class Read {
             Instant.now().plus(Duration.standardMinutes(DEFAULT_BUNDLE_FINALIZATION_LIMIT_MINS)),
             currentRestriction.getCheckpoint()::finalizeCheckpoint);
       }
+
+      // Update the readers cache with latest CheckpointMark.
+      cachedReaders.put(
+          UnboundedSourceRestriction.create(
+              currentReader.getCurrentSource(), currentReader.getCheckpointMark(), null),
+          currentReader);
 
       // If we have been split/checkpoint by a runner, the tracker will have been updated to the
       // empty source and we will return stop. Otherwise the unbounded source has only temporarily
@@ -756,23 +801,20 @@ public class Read {
       private final PipelineOptions pipelineOptions;
       private UnboundedSource.UnboundedReader<OutputT> currentReader;
       private boolean readerHasBeenStarted;
+      private boolean isDone;
 
       UnboundedSourceAsSDFRestrictionTracker(
           UnboundedSourceRestriction<OutputT, CheckpointT> initialRestriction,
-          PipelineOptions pipelineOptions) {
+          PipelineOptions pipelineOptions,
+          UnboundedReader cachedUnboundedReader) {
         this.initialRestriction = initialRestriction;
         this.pipelineOptions = pipelineOptions;
+        currentReader = cachedUnboundedReader;
       }
 
       @Override
       public boolean tryClaim(UnboundedSourceValue<OutputT>[] position) {
         try {
-          if (currentReader == null) {
-            currentReader =
-                initialRestriction
-                    .getSource()
-                    .createReader(pipelineOptions, initialRestriction.getCheckpoint());
-          }
           if (currentReader instanceof EmptyUnboundedSource.EmptyUnboundedReader) {
             return false;
           }
@@ -793,32 +835,14 @@ public class Read {
                   currentReader.getCurrentTimestamp());
           return true;
         } catch (IOException e) {
-          if (currentReader != null) {
-            try {
-              currentReader.close();
-            } catch (IOException closeException) {
-              e.addSuppressed(closeException);
-            }
-          }
           throw new RuntimeException(e);
-        }
-      }
-
-      @Override
-      protected void finalize() throws Throwable {
-        if (currentReader != null) {
-          try {
-            currentReader.close();
-          } catch (IOException e) {
-            LOG.error("Failed to close UnboundedReader due to failure processing bundle.", e);
-          }
         }
       }
 
       /** The value is invalid if {@link #tryClaim} has ever thrown an exception. */
       @Override
       public UnboundedSourceRestriction<OutputT, CheckpointT> currentRestriction() {
-        if (currentReader == null) {
+        if (!readerHasBeenStarted) {
           return initialRestriction;
         }
         Instant watermark = ensureTimestampWithinBounds(currentReader.getWatermark());
@@ -827,11 +851,12 @@ public class Read {
             && BoundedWindow.TIMESTAMP_MAX_VALUE.equals(watermark)) {
           CheckpointT checkpointT = (CheckpointT) currentReader.getCheckpointMark();
           try {
+            // We want to close the reader immediately when we know we are done.
             currentReader.close();
           } catch (IOException e) {
             LOG.warn("Failed to close UnboundedReader.", e);
           } finally {
-            currentReader = EmptyUnboundedSource.INSTANCE.createReader(null, checkpointT);
+            isDone = true;
           }
         }
         return UnboundedSourceRestriction.create(
@@ -858,21 +883,14 @@ public class Read {
                 UnboundedSourceRestriction.create(
                     EmptyUnboundedSource.INSTANCE, null, BoundedWindow.TIMESTAMP_MAX_VALUE),
                 currentRestriction);
-        try {
-          currentReader.close();
-        } catch (IOException e) {
-          LOG.warn("Failed to close UnboundedReader.", e);
-        } finally {
-          currentReader =
-              EmptyUnboundedSource.INSTANCE.createReader(null, currentRestriction.getCheckpoint());
-        }
+        isDone = true;
         return result;
       }
 
       @Override
       public void checkDone() throws IllegalStateException {
         checkState(
-            currentReader instanceof EmptyUnboundedSource.EmptyUnboundedReader,
+            isDone,
             "Expected all records to have been claimed but finished processing "
                 + "unbounded source while some records may have not been read.");
       }
@@ -887,17 +905,6 @@ public class Read {
         // We treat the empty source as implicitly done.
         if (currentRestriction().getSource() instanceof EmptyUnboundedSource) {
           return RestrictionTracker.Progress.from(1, 0);
-        }
-
-        if (currentReader == null) {
-          try {
-            currentReader =
-                initialRestriction
-                    .getSource()
-                    .createReader(pipelineOptions, initialRestriction.getCheckpoint());
-          } catch (IOException e) {
-            throw new RuntimeException(e);
-          }
         }
 
         long size = currentReader.getSplitBacklogBytes();
