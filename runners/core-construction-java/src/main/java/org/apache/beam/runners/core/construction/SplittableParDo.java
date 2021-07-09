@@ -195,9 +195,9 @@ public class SplittableParDo<InputT, OutputT, RestrictionT, WatermarkEstimatorSt
         input
             .apply(
                 "Pair with initial restriction",
-                ParDo.of(new PairWithRestrictionFn<InputT, OutputT, RestrictionT>(doFn)))
+                ParDo.of(new PairWithRestrictionFn<InputT, OutputT, RestrictionT>(doFn, sideInputs)).withSideInputs(sideInputs))
             .setCoder(splitCoder)
-            .apply("Split restriction", ParDo.of(new SplitRestrictionFn<>(doFn)))
+            .apply("Split restriction", ParDo.of(new SplitRestrictionFn<>(doFn, sideInputs)).withSideInputs(sideInputs))
             .setCoder(splitCoder)
             // ProcessFn requires all input elements to be in a single window and have a single
             // element per work item. This must precede the unique keying so each key has a single
@@ -500,9 +500,11 @@ public class SplittableParDo<InputT, OutputT, RestrictionT, WatermarkEstimatorSt
 
     // Initialized in setup()
     private transient @Nullable DoFnInvoker<InputT, OutputT> invoker;
+    private final List<PCollectionView<?>> sideInputs;
 
-    PairWithRestrictionFn(DoFn<InputT, OutputT> fn) {
+    PairWithRestrictionFn(DoFn<InputT, OutputT> fn, List<PCollectionView<?>> sideInputs) {
       this.fn = fn;
+      this.sideInputs = sideInputs;
     }
 
     @Setup
@@ -540,6 +542,11 @@ public class SplittableParDo<InputT, OutputT, RestrictionT, WatermarkEstimatorSt
                     @Override
                     public BoundedWindow window() {
                       return w;
+                    }
+
+                    @Override
+                    public Object sideInput(String tagId) {
+                      return context.sideInput(tagId);
                     }
 
                     @Override
